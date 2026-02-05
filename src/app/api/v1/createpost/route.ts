@@ -32,9 +32,37 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const data = await request.json();
-    
-    if (DEBUG) console.log('JSON data received:', Object.keys(data));
+    const contentType = request.headers.get('content-type') || '';
+    let data: any;
+    if (contentType.includes('multipart/form-data')) {
+      if (DEBUG) console.log('Detected multipart/form-data upload');
+      const form = await request.formData();
+      const file = form.get('file') || form.get('image') || form.get('photo') || null;
+      if (!file) {
+        if (DEBUG) console.error('Multipart upload missing file field');
+        return NextResponse.json({ error: 'Missing file field in multipart/form-data' }, { status: 400 });
+      }
+      const arrayBuffer = await (file as any).arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      const b64 = Buffer.from(bytes).toString('base64');
+      data = {
+        author: form.get('author') || undefined,
+        body: form.get('body') || '',
+        media: {
+          name: (file as any).name || 'upload.jpg',
+          type: (file as any).type || 'image/jpeg',
+          data: b64
+        }
+      };
+      if (DEBUG) {
+        console.log('Multipart parsed:', { mediaName: data.media.name, mediaType: data.media.type, size: bytes.length });
+        console.log('upload: content-type=', contentType, 'content-length=', request.headers.get('content-length'));
+        try { console.log('multipart keys:', Array.from((await request.formData()).keys())); } catch(e){/* ignore */}
+      }
+    } else {
+      data = await request.json();
+      if (DEBUG) console.log('JSON data received:', Object.keys(data));
+    }
 
     const { author, body, media } = data;
 
