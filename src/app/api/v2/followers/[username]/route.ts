@@ -4,18 +4,11 @@ import { HAFSQL_Database } from '@/lib/hafsql_database';
 const db = new HAFSQL_Database();
 export async function GET(
     request: NextRequest,
+    { params }: { params: Promise<{ username: string }> }
 ) {
-  console.log("Fetching folowers data...");
+  console.log("Fetching followers data...");
   try {
-    const { searchParams } = new URL(request.url);
-    const username = searchParams.get('username');
-// export async function GET(
-//     request: Request,
-//     { params }: { params: { username: string } }
-// ) {
-//     try {
-//         // Wait for params to be available
-//         const { username } = await params;
+    const { username } = await params;
 
         // Get account information
         const {rows, headers} = await db.executeQuery(`

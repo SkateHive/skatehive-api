@@ -5,11 +5,11 @@ const db = new HAFSQL_Database();
 
 export async function GET(
     request: NextRequest,
+    { params }: { params: Promise<{ username: string }> }
 ) {
     console.log("Fetching following data...");
     try {
-        const { searchParams } = new URL(request.url);
-        const username = searchParams.get('username');
+        const { username } = await params;
 
 
         // Get account information

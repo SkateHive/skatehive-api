@@ -21,12 +21,12 @@
       // Get total count for pagination
       const {rows: totalRows} = await db.executeQuery(`
         SELECT COUNT(*) as total
-        FROM comments
+        FROM comments c
         WHERE (
       c.parent_permlink SIMILAR TO 'snap-container-%'
       OR c.parent_permlink = 'nxvsjarvmp'
   )
-        AND json_metadata @> '{"tags": ["hive-173115"]}'
+        AND c.json_metadata @> '{"tags": ["hive-173115"]}'
       `);
       
       const total = parseInt(totalRows[0].total);
