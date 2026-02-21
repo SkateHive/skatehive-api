@@ -218,7 +218,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Create comment operation (snap = comment without title)
-    const commentOp = [
+    const commentOp: any = [
       'comment',
       {
         parent_author: parentAuthor,

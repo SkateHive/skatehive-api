@@ -177,7 +177,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Create comment operation
-    const commentOp = [
+    const commentOp: any = [
       'comment',
       {
         parent_author: '',
@@ -190,11 +190,11 @@ export async function POST(request: NextRequest) {
       }
     ];
     
-    const operations = [commentOp];
+    const operations: any[] = [commentOp];
     
     // Add comment_options if beneficiaries are specified
     if (data.beneficiaries && data.beneficiaries.length > 0) {
-      const commentOptionsOp = [
+      const commentOptionsOp: any = [
         'comment_options',
         {
           author,
