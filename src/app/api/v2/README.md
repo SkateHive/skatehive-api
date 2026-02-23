@@ -137,6 +137,54 @@ curl -X GET "http://localhost:3000/api/v2"
 | `/api/v2/balance/{username}` | GET    | User wallet balance   | 🔄 Testing |
 | `/api/v2/market`             | GET    | Market and token data | 🔄 Testing |
 
+### 📤 IPFS & Media Endpoints
+
+| Endpoint                    | Method | Description                              | Status     | Auth Required |
+| --------------------------- | ------ | ---------------------------------------- | ---------- | ------------- |
+| `/api/v2/ipfs/upload`       | POST   | Upload images/videos to Skatehive IPFS   | ✅ Working | Yes (API Key) |
+
+#### IPFS Upload Endpoint
+
+Upload images and videos to Skatehive IPFS storage via Pinata.
+
+**Authentication**: API key required (Bearer token)
+
+**Request Format**: `multipart/form-data`
+
+**Fields**:
+- `file` (required): Image or video file (max 100MB)
+- `creator` (optional): Username of uploader (defaults to API key name)
+
+**Supported File Types**:
+- **Images**: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`
+- **Videos**: `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`
+
+**Example**:
+```bash
+curl -X POST https://api.skatehive.app/api/v2/ipfs/upload \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@skatevideo.mp4" \
+  -F "creator=myusername"
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "ipfsHash": "QmYH8ZqN...",
+  "ipfsUrl": "https://ipfs.skatehive.app/ipfs/QmYH8ZqN...",
+  "ipfsUri": "ipfs://QmYH8ZqN...",
+  "filename": "skatevideo.mp4",
+  "fileSize": 15234567,
+  "mediaType": "video",
+  "creator": "myusername"
+}
+```
+
+**Rate Limits**:
+- 100 uploads per hour per API key
+- 50 uploads per hour per IP (without key)
+
 ## Testing Status
 
 Based on live testing with real Skatehive community data:
