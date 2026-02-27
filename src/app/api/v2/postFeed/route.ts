@@ -10,11 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { validateApiKey, checkRateLimit } from '@/app/utils/apiAuth';
 import { HiveClient } from '@/lib/hive-client';
 import { PrivateKey } from '@hiveio/dhive';
-
-// Skatehive constants
-const COMMUNITY_TAG = 'hive-173115';
-const THREAD_AUTHOR = process.env.NEXT_PUBLIC_SKATEHIVE_THREAD_AUTHOR || 'peak.snaps';
-const THREAD_PERMLINK = process.env.NEXT_PUBLIC_SKATEHIVE_THREAD_PERMLINK || 'nxvsjarvmp';
+import { COMMUNITY_TAG, THREAD_AUTHOR, getLatestSnapContainer, extractHashtags } from '@/lib/feed-posting';
 
 interface PostFeedRequest {
   author: string; // Required: Hive username
@@ -26,45 +22,6 @@ interface PostFeedRequest {
   parent_permlink?: string; // Default: latest snap-container
 }
 
-/**
- * Get latest snap container permlink from @peak.snaps
- * Uses get_discussions_by_author_before_date to find the most recent container
- * Same implementation as skatehive3.0 client-functions.ts
- */
-async function getLatestSnapContainer(): Promise<string> {
-  try {
-    const author = THREAD_AUTHOR;
-    const beforeDate = new Date().toISOString().split('.')[0]; // Remove milliseconds
-    const permlink = '';
-    const limit = 1;
-
-    const result = await HiveClient.database.call(
-      'get_discussions_by_author_before_date',
-      [author, permlink, beforeDate, limit]
-    );
-
-    if (result && result.length > 0 && result[0].permlink) {
-      console.log('✅ Found snap container:', result[0].permlink, 'from', author);
-      return result[0].permlink;
-    }
-    
-    // Fallback to main thread if no container found
-    console.warn('⚠️ No snap container found, using fallback:', THREAD_PERMLINK);
-    return THREAD_PERMLINK;
-  } catch (error) {
-    console.error('❌ Error getting snap container:', error);
-    return THREAD_PERMLINK;
-  }
-}
-
-/**
- * Extract hashtags from text
- */
-function extractHashtags(text: string): string[] {
-  const hashtagRegex = /#(\w+)/g;
-  const matches = text.match(hashtagRegex) || [];
-  return matches.map(hashtag => hashtag.slice(1)); // Remove '#'
-}
 
 export async function POST(request: NextRequest) {
   // 1. Validate API key
