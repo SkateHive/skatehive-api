@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { HAFSQL_Database } from '@/lib/hafsql_database';
 import { normalizePost, Comment } from './helpers';
+import { dealiasSoftPosts } from '@/lib/soft-posts';
 
 const hafDb = new HAFSQL_Database();
 
@@ -130,7 +131,8 @@ async function fetchFeedData(
   console.timeEnd('HAFSQL Main Query');
 
   const rows = hafRows.rows.map(row => normalizePost(row, 'haf'));
-  return { total, rows };
+  const dealiasedRows = await dealiasSoftPosts(rows);
+  return { total, rows: dealiasedRows };
 }
 
 async function updateCacheInBackground(

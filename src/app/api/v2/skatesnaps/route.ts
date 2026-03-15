@@ -3,7 +3,7 @@
  */
   import { NextRequest, NextResponse } from 'next/server';
   import { HAFSQL_Database } from '@/lib/hafsql_database';
-  
+  import { dealiasSoftPosts } from '@/lib/soft-posts';
   const db = new HAFSQL_Database();
   
   const DEFAULT_PAGE = Number(process.env.DEFAULT_PAGE) || 1;
@@ -134,6 +134,8 @@
         OFFSET ${offset};`
       );
   
+      const dealiasedRows = await dealiasSoftPosts(rows as any);
+  
       // Calculate pagination metadata
       const totalPages = Math.ceil(total / limit);
       const hasNextPage = page < totalPages;
@@ -142,7 +144,7 @@
       return NextResponse.json(
         { 
           success: true, 
-          data: rows,
+          data: dealiasedRows,
           headers: headers,
           pagination: {
             total,

@@ -50,6 +50,10 @@ export interface Comment {
     pending_payout?: number;
     pending_payout_symbol?: string;
   }[];
+  is_soft_post?: boolean;
+  soft_post_author?: string;
+  soft_post_display_name?: string;
+  soft_post_avatar?: string;
 }
 
 // Normalize votes from HAFSQL (Postgres)
