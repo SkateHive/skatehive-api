@@ -30,10 +30,12 @@ export async function GET(
         if (!rows || rows.length === 0) {
             return NextResponse.json(
                 {
-                    success: false,
-                    error: 'Account not found'
+                    success: true,
+                    total_count: 0,
+                    data: [],
+                    headers: headers
                 },
-                { status: 404 }
+                { status: 200 }
             );
         }
 
