@@ -1,16 +1,17 @@
 // Shared configuration for transcode services
+// Priority order: Mac Mini M4 (fastest, local) → Oracle (cloud) → Raspberry Pi (backup)
 export const TRANSCODE_SERVICES = [
   {
     priority: 1,
-    name: 'Oracle (Primary)',
-    healthUrl: 'https://146-235-239-243.sslip.io/healthz',
-    transcodeUrl: 'https://146-235-239-243.sslip.io/transcode'
+    name: 'Mac Mini M4 (Primary)',
+    healthUrl: 'https://minivlad.tail83ea3e.ts.net/video/healthz',
+    transcodeUrl: 'https://minivlad.tail83ea3e.ts.net/video/transcode'
   },
   {
     priority: 2,
-    name: 'Mac Mini M4 (Secondary)',
-    healthUrl: 'https://minivlad.tail83ea3e.ts.net/video/healthz',
-    transcodeUrl: 'https://minivlad.tail83ea3e.ts.net/video/transcode'
+    name: 'Oracle (Secondary)',
+    healthUrl: 'https://146-235-239-243.sslip.io/healthz',
+    transcodeUrl: 'https://146-235-239-243.sslip.io/transcode'
   },
   {
     priority: 3,
