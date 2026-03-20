@@ -29,6 +29,11 @@ export default function Leaderboard() {
 
   useEffect(() => {
     const fetchData = async () => {
+      if (!supabase) {
+        console.error("Supabase client not initialized");
+        return;
+      }
+
       const { data, error } = await supabase
         .from(process.env.NEXT_PUBLIC_SUPABASE_DB || "leaderboard")
         .select("*");

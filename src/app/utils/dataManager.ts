@@ -37,6 +37,11 @@ async function fetchPostsAndSnaps(hive_author: string, postsData: { rows: any[];
 
 // Helper function to upsert authors into Supabase
 export const upsertAuthors = async (authors: { hive_author: string }[]) => {
+  if (!supabase) {
+    logWithColor('Supabase client not initialized', 'red');
+    return;
+  }
+
   try {
     const authorData: Partial<DataBaseAuthor>[] = authors.map(({ hive_author }) => ({
       hive_author,
@@ -59,6 +64,11 @@ export const upsertAuthors = async (authors: { hive_author: string }[]) => {
 
 // Helper function to upsert account data into the leaderboard
 export const upsertAccountData = async (accounts: Partial<DataBaseAuthor>[]) => {
+  if (!supabase) {
+    logWithColor('Supabase client not initialized', 'red');
+    return;
+  }
+
   try {
     for (const account of accounts) {
       const { error: upsertError } = await supabase
@@ -201,6 +211,11 @@ export const fetchAndUpsertAccountData = async (subscriber: { hive_author: strin
 
 // Function to calculate and update points for all users
 export const calculateAndUpsertPoints = async () => {
+  if (!supabase) {
+    logWithColor('Supabase client not initialized', 'red');
+    return;
+  }
+
   try {
     // Fetch all data from the leaderboard
     const leaderboardData = await getLeaderboard();

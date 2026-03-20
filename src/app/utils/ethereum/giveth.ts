@@ -50,6 +50,11 @@ export const fetchGivethDonations = async (): Promise<GivethResponse> => {
 
 /** ✅ Fetch all current users from Supabase */
 export const fetchAllHiveAuthors = async () => {
+  if (!supabase) {
+    logWithColor('Supabase client not initialized', 'red');
+    throw new Error('Supabase client not initialized');
+  }
+
   const { data, error } = await supabase
     .from(process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard')
     .select('hive_author, eth_address, giveth_donations_usd, giveth_donations_amount');
@@ -64,6 +69,11 @@ export const fetchAllHiveAuthors = async () => {
 
 /** ✅ Match Giveth donors to existing users or create new ones */
 export const matchAndUpsertDonors = async () => {
+  if (!supabase) {
+    logWithColor('Supabase client not initialized', 'red');
+    throw new Error('Supabase client not initialized');
+  }
+
   try {
     // Fetch donations
     const givethData = await fetchGivethDonations();

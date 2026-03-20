@@ -1,6 +1,11 @@
 import { supabase } from './supabaseClient'; // Use the existing Supabase client
 
 export const getLeaderboard = async () => {
+    if (!supabase) {
+        console.error('Supabase client not initialized');
+        throw new Error('Supabase client not initialized');
+    }
+
     // try {
     //     const { data } = await supabase
     //         .from(process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard')
