@@ -80,6 +80,13 @@ async function fetchFeedData(
       c.pending_payout_value, c.author_rewards, c.author_rewards_in_hive, c.total_payout_value, 
       c.curator_payout_value, c.beneficiary_payout_value, c.total_rshares, c.net_rshares, c.total_vote_weight, 
       c.beneficiaries, c.max_accepted_payout, c.percent_hbd, c.allow_votes, c.allow_curation_rewards, c.deleted,
+      (
+        SELECT COUNT(*)
+        FROM comments ch
+        WHERE ch.parent_author = c.author
+          AND ch.parent_permlink = c.permlink
+          AND ch.deleted = false
+      ) AS children,
       a.json_metadata AS user_json_metadata, a.reputation, a.followers, a.followings,
       COALESCE(
         json_agg(

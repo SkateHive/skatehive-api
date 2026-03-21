@@ -40,6 +40,7 @@ export interface Comment {
   reputation: null;
   followers: null;
   followings: null;
+  children: number;
   votes: {
     id: number;
     timestamp: string;
@@ -136,6 +137,7 @@ export function normalizePost(post: any, source: 'haf' | 'hive'): Comment {
     reputation: null,
     followers: null,
     followings: null,
+    children: Number(post.children || 0),
     votes: source === 'haf' ? normalizeHafVotes(post.votes) : normalizeHiveVotes(post.votes),
   };
 }
