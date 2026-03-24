@@ -3,12 +3,13 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { HAFSQL_Database } from '@/lib/hafsql_database';
+import { normalizePost } from '../../feed/helpers';
+import { dealiasSoftPosts } from '@/lib/soft-posts';
 
 const db = new HAFSQL_Database();
 
 const DEFAULT_PAGE = Number(process.env.DEFAULT_PAGE) || 1;
 const DEFAULT_FEED_LIMIT = Number(process.env.DEFAULT_FEED_LIMIT) || 25;
-
 
 export async function GET(
     request: NextRequest,
@@ -37,7 +38,7 @@ export async function GET(
         const total = parseInt(totalRows[0].total);
 
         // Get paginated data
-        const {rows, headers} = await db.executeQuery(`
+        const {rows: hafRows} = await db.executeQuery(`
 SELECT 
     c.body, 
     c.author, 
@@ -69,6 +70,13 @@ SELECT
     c.allow_votes, 
     c.allow_curation_rewards, 
     c.deleted,
+    (
+        SELECT COUNT(*)
+        FROM comments ch
+        WHERE ch.parent_author = c.author
+          AND ch.parent_permlink = c.permlink
+          AND ch.deleted = false
+    ) AS children,
     a.json_metadata AS user_json_metadata, 
     a.reputation, 
     a.followers, 
@@ -137,6 +145,9 @@ LIMIT ${limit}
 OFFSET ${offset};
 `, [{ name: 'username', value: username }]);
 
+        const rows = hafRows.map(row => normalizePost(row, 'haf'));
+        const dealiasedRows = await dealiasSoftPosts(rows);
+
         // Calculate pagination metadata
         const totalPages = Math.ceil(total / limit);
         const hasNextPage = page < totalPages;
@@ -145,8 +156,7 @@ OFFSET ${offset};
         return NextResponse.json(
             {
                 success: true,
-                data: rows,
-                headers: headers,
+                data: dealiasedRows,
                 pagination: {
                     total,
                     totalPages,

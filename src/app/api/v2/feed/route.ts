@@ -32,12 +32,13 @@ interface FeedData {
 async function fetchTotal(
   hafDb: HAFSQL_Database,
   community: string,
-  parentPermlink: string
+  parentPermlink: string,
+  author?: string
 ): Promise<number> {
   const tagFilter = `{"tags": ["${community}"]}`;
   console.time('⏱️ HAFSQL COUNT Query');
-  const totalResult = await hafDb.executeQuery(
-    `
+  
+  const query = `
     SELECT COUNT(*) AS total
     FROM comments c
     WHERE 
@@ -49,13 +50,15 @@ async function fetchTotal(
         )
         OR c.parent_permlink = @parent_permlink
       )
+      ${author ? 'AND c.author = @author' : ''}
       AND c.deleted = false;
-    `,
-    [
-      { name: 'tag_filter', value: tagFilter },
-      { name: 'parent_permlink', value: parentPermlink },
-    ]
-  );
+  `;
+
+  const totalResult = await hafDb.executeQuery(query, [
+    { name: 'tag_filter', value: tagFilter },
+    { name: 'parent_permlink', value: parentPermlink },
+    ...(author ? [{ name: 'author', value: author }] : []),
+  ]);
   console.timeEnd('⏱️ HAFSQL COUNT Query');
   return parseInt(totalResult.rows[0].total, 10);
 }
@@ -65,14 +68,14 @@ async function fetchFeedData(
   community: string,
   parentPermlink: string,
   limit: number,
-  offset: number
+  offset: number,
+  author?: string
 ): Promise<FeedData> {
   const tagFilter = `{"tags": ["${community}"]}`;
-  const total = await fetchTotal(hafDb, community, parentPermlink);
+  const total = await fetchTotal(hafDb, community, parentPermlink, author);
 
   console.time('HAFSQL Main Query');
-  const hafRows = await hafDb.executeQuery(
-    `
+  const query = `
     SELECT 
       c.body, c.author, c.permlink, c.parent_author, c.parent_permlink, 
       c.created, c.last_edited, c.cashout_time, c.remaining_till_cashout, c.last_payout, 
@@ -117,6 +120,7 @@ async function fetchFeedData(
         )
         OR c.parent_permlink = @parent_permlink
       )
+      ${author ? 'AND c.author = @author' : ''}
       AND c.deleted = false
     GROUP BY 
       c.body, c.author, c.permlink, c.parent_author, c.parent_permlink, c.created, c.last_edited, c.cashout_time, 
@@ -127,14 +131,15 @@ async function fetchFeedData(
     ORDER BY c.created DESC
     LIMIT @limit
     OFFSET @offset;
-    `,
-    [
-      { name: 'tag_filter', value: tagFilter },
-      { name: 'parent_permlink', value: parentPermlink },
-      { name: 'limit', value: limit },
-      { name: 'offset', value: offset },
-    ]
-  );
+  `;
+
+  const hafRows = await hafDb.executeQuery(query, [
+    { name: 'tag_filter', value: tagFilter },
+    { name: 'parent_permlink', value: parentPermlink },
+    { name: 'limit', value: limit },
+    { name: 'offset', value: offset },
+    ...(author ? [{ name: 'author', value: author }] : []),
+  ]);
   console.timeEnd('HAFSQL Main Query');
 
   const rows = hafRows.rows.map(row => normalizePost(row, 'haf'));
@@ -148,7 +153,8 @@ async function updateCacheInBackground(
   parentPermlink: string,
   limit: number,
   offset: number,
-  cacheKey: string
+  cacheKey: string,
+  author?: string
 ) {
   if (activeUpdates.has(cacheKey)) {
     console.log('Skipping duplicate background update for:', cacheKey);
@@ -157,7 +163,7 @@ async function updateCacheInBackground(
   activeUpdates.add(cacheKey);
   try {
     console.log('Starting background cache update for:', cacheKey);
-    const feedData = await fetchFeedData(hafDb, community, parentPermlink, limit, offset);
+    const feedData = await fetchFeedData(hafDb, community, parentPermlink, limit, offset, author);
     cache.set(cacheKey, { total: feedData.total, rows: feedData.rows, timestamp: Date.now() });
     console.log('Background cache update completed:', cacheKey);
   } catch (error) {
@@ -172,10 +178,11 @@ async function updateCacheInBackground(
 }
 
 export async function GET(request: NextRequest) {
-  console.log('Fetching MAIN FEED data...');
+  console.log('Fetching FEED data...');
 
   const { searchParams } = new URL(request.url);
   const COMMUNITY = searchParams.get('community_code') || process.env.MY_COMMUNITY_CATEGORY || 'hive-173115';
+  const author = searchParams.get('author') || undefined;
   const page = Math.max(1, Number(searchParams.get('page')) || DEFAULT_PAGE);
   const limit = Math.max(1, Number(searchParams.get('limit')) || DEFAULT_FEED_LIMIT);
   const offset = (page - 1) * limit;
@@ -187,7 +194,7 @@ export async function GET(request: NextRequest) {
     console.log(`🔗 Active HAFSQL connections: ${hafDb.getActiveConnections()}`);
     cleanupCache();
 
-    const cacheKey = `feed:${COMMUNITY}:${PARENT_PERMLINK}:${page}:${limit}`;
+    const cacheKey = `feed:${COMMUNITY}:${PARENT_PERMLINK}:${author || 'all'}:${page}:${limit}`;
     const cached = cache.get(cacheKey);
 
     if (cached) {
@@ -196,14 +203,14 @@ export async function GET(request: NextRequest) {
       console.log('📁 Using cached rows:', { rowCount: resultsRows.length });
     } else {
       console.log('Cache miss, fetching data synchronously');
-      const feedData = await fetchFeedData(hafDb, COMMUNITY, PARENT_PERMLINK, limit, offset);
+      const feedData = await fetchFeedData(hafDb, COMMUNITY, PARENT_PERMLINK, limit, offset, author);
       total = feedData.total;
       resultsRows = feedData.rows;
       cache.set(cacheKey, { total, rows: resultsRows, timestamp: Date.now() });
     }
 
     // Schedule background cache update
-    setTimeout(() => updateCacheInBackground(hafDb, COMMUNITY, PARENT_PERMLINK, limit, offset, cacheKey), 0);
+    setTimeout(() => updateCacheInBackground(hafDb, COMMUNITY, PARENT_PERMLINK, limit, offset, cacheKey, author), 0);
 
     console.log('✅ Returning response to client');
     return NextResponse.json({
