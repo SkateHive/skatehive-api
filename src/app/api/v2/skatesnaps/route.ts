@@ -1,5 +1,9 @@
 /*
-  Main Feed 
+ * @deprecated This endpoint is deprecated. Use /api/v2/feed instead.
+ * 
+ * skatesnaps was the original snaps feed using the old container (nxvsjarvmp).
+ * It lacks: children count, post normalization, caching, and parameterized queries.
+ * Kept for backward compatibility only — do NOT use for new integrations.
  */
   import { NextRequest, NextResponse } from 'next/server';
   import { HAFSQL_Database } from '@/lib/hafsql_database';
