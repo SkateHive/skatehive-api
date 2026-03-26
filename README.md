@@ -156,7 +156,10 @@ Welcome to the **Skatehive API**! A comprehensive REST API for the skateboarding
 │   │       │   ├── getLeaderboard.ts
 │   │       │   └── supabaseClient.ts
 │   │       └── types.ts
-│   └── models
+│   ├── lib
+│   ├── middleware.ts
+│   ├── swagger-optimized.ts
+│   └── swagger-schemas.ts
 ├── tsconfig.json
 └── vercel.json
 ```

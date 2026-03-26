@@ -1,5 +1,6 @@
 // Shared configuration for transcode services
-// Priority order: Mac Mini M4 (fastest, local) → Oracle (cloud) → Raspberry Pi (backup)
+// All servers run the same SkateHive video-transcoder codebase
+// Priority order: Mac Mini M4 (fastest) → Oracle (cloud) → Raspberry Pi (backup)
 export const TRANSCODE_SERVICES = [
   {
     priority: 1,
