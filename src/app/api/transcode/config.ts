@@ -11,8 +11,8 @@ export const TRANSCODE_SERVICES = [
   {
     priority: 2,
     name: 'Oracle (Secondary)',
-    healthUrl: 'https://146-235-239-243.sslip.io/healthz',
-    transcodeUrl: 'https://146-235-239-243.sslip.io/transcode'
+    healthUrl: 'https://transcode.skatehive.app/healthz',
+    transcodeUrl: 'https://transcode.skatehive.app/transcode'
   },
   {
     priority: 3,
