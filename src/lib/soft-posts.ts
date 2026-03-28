@@ -1,4 +1,4 @@
-import { supabase } from '@/app/utils/supabase/supabaseClient';
+import { supabaseAdmin, supabase } from '@/app/utils/supabase/supabaseClient';
 import { Comment } from '@/app/api/v2/feed/helpers';
 
 export function extractSafeUser(metadata: any): string | null {
@@ -21,7 +21,8 @@ export function extractSafeUser(metadata: any): string | null {
 }
 
 export async function dealiasSoftPosts(posts: Comment[]): Promise<Comment[]> {
-  if (!supabase) return posts;
+  const client = supabaseAdmin || supabase;
+  if (!client) return posts;
 
   const softPostCandidates = posts.filter(p => p.author === 'skateuser');
   
@@ -38,7 +39,7 @@ export async function dealiasSoftPosts(posts: Comment[]): Promise<Comment[]> {
   const safeUserHashes = Array.from(new Set(batch.map(b => b.safe_user as string)));
 
   try {
-    const { data: softPostsData, error: softPostsError } = await supabase
+    const { data: softPostsData, error: softPostsError } = await client
       .from('userbase_soft_posts')
       .select('safe_user, userbase_users(display_name, handle, avatar_url)')
       .in('safe_user', safeUserHashes);

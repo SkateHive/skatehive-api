@@ -36,16 +36,17 @@ async function fetchTotal(
   author?: string
 ): Promise<number> {
   const tagFilter = `{"tags": ["${community}"]}`;
-  console.time('⏱️ HAFSQL COUNT Query');
-  
+  const countLabel = `HAFSQL COUNT Query [${Date.now()}]`;
+  console.time(countLabel);
+
   const query = `
     SELECT COUNT(*) AS total
     FROM comments c
-    WHERE 
+    WHERE
       (
         (
           c.parent_author = 'peak.snaps'
-          AND c.parent_permlink SIMILAR TO 'snap-container-%' 
+          AND c.parent_permlink SIMILAR TO 'snap-container-%'
           AND c.json_metadata @> @tag_filter
         )
         OR c.parent_permlink = @parent_permlink
@@ -59,7 +60,7 @@ async function fetchTotal(
     { name: 'parent_permlink', value: parentPermlink },
     ...(author ? [{ name: 'author', value: author }] : []),
   ]);
-  console.timeEnd('⏱️ HAFSQL COUNT Query');
+  console.timeEnd(countLabel);
   return parseInt(totalResult.rows[0].total, 10);
 }
 
@@ -74,14 +75,15 @@ async function fetchFeedData(
   const tagFilter = `{"tags": ["${community}"]}`;
   const total = await fetchTotal(hafDb, community, parentPermlink, author);
 
-  console.time('HAFSQL Main Query');
+  const mainLabel = `HAFSQL Main Query [${Date.now()}]`;
+  console.time(mainLabel);
   const query = `
-    SELECT 
-      c.body, c.author, c.permlink, c.parent_author, c.parent_permlink, 
-      c.created, c.last_edited, c.cashout_time, c.remaining_till_cashout, c.last_payout, 
-      c.tags, c.category, c.json_metadata AS post_json_metadata, c.root_author, c.root_permlink, 
-      c.pending_payout_value, c.author_rewards, c.author_rewards_in_hive, c.total_payout_value, 
-      c.curator_payout_value, c.beneficiary_payout_value, c.total_rshares, c.net_rshares, c.total_vote_weight, 
+    SELECT
+      c.body, c.author, c.permlink, c.parent_author, c.parent_permlink,
+      c.created, c.last_edited, c.cashout_time, c.remaining_till_cashout, c.last_payout,
+      c.tags, c.category, c.json_metadata AS post_json_metadata, c.root_author, c.root_permlink,
+      c.pending_payout_value, c.author_rewards, c.author_rewards_in_hive, c.total_payout_value,
+      c.curator_payout_value, c.beneficiary_payout_value, c.total_rshares, c.net_rshares, c.total_vote_weight,
       c.beneficiaries, c.max_accepted_payout, c.percent_hbd, c.allow_votes, c.allow_curation_rewards, c.deleted,
       (
         SELECT COUNT(*)
@@ -140,7 +142,7 @@ async function fetchFeedData(
     { name: 'offset', value: offset },
     ...(author ? [{ name: 'author', value: author }] : []),
   ]);
-  console.timeEnd('HAFSQL Main Query');
+  console.timeEnd(mainLabel);
 
   const rows = hafRows.rows.map(row => normalizePost(row, 'haf'));
   const dealiasedRows = await dealiasSoftPosts(rows);
