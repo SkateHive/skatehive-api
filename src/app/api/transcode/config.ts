@@ -1,9 +1,9 @@
-// TODO: Verify if the macmini limitation is true 
-// Shared configuration for transcode services
-// All servers run the same SkateHive video-transcoder codebase
-// Priority order: Oracle (public IP, browser-reachable) → Mac Mini M4 (fallback)
-// NOTE: Mac Mini uses Tailscale Funnel which fails for large browser POST uploads.
-// Browsers cannot reach Tailscale Funnel URLs for multipart uploads, only health GETs via server-side proxy.
+// Shared configuration for transcode services.
+// All servers run the same SkateHive video-transcoder codebase.
+// Priority order reflects the current production routing.
+// NOTE: Mac Mini uses Tailscale Funnel. Keep Oracle primary for browser uploads;
+// large multipart POST uploads can be unreliable through Funnel, while health/status
+// checks can safely include Mac Mini.
 export const TRANSCODE_SERVICES = [
   {
     priority: 1,

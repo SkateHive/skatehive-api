@@ -49,63 +49,42 @@ export async function GET(request: NextRequest) {
   try {
     const startTime = Date.now();
 
-    // Check services sequentially by priority and stop at first healthy one
     const orderedServices = [...TRANSCODE_SERVICES].sort((a, b) => a.priority - b.priority);
-    const serviceStatuses: ServiceStatus[] = [];
-    let activeService: ServiceStatus | undefined;
+    const serviceStatuses: ServiceStatus[] = await Promise.all(
+      orderedServices.map(async (service) => {
+        const healthResult = await checkServiceHealth(service.healthUrl);
 
-    for (const service of orderedServices) {
-      const healthResult = await checkServiceHealth(service.healthUrl);
+        return {
+          priority: service.priority,
+          name: service.name,
+          healthUrl: service.healthUrl,
+          transcodeUrl: service.transcodeUrl,
+          isHealthy: healthResult.isHealthy,
+          responseTime: healthResult.responseTime,
+          error: healthResult.error,
+          lastChecked: new Date().toISOString()
+        };
+      })
+    );
 
-      const status: ServiceStatus = {
-        priority: service.priority,
-        name: service.name,
-        healthUrl: service.healthUrl,
-        transcodeUrl: service.transcodeUrl,
-        isHealthy: healthResult.isHealthy,
-        responseTime: healthResult.responseTime,
-        error: healthResult.error,
-        lastChecked: new Date().toISOString()
-      };
-
-      serviceStatuses.push(status);
-
-      if (healthResult.isHealthy) {
-        activeService = status;
-        break;
-      }
-    }
-
-    // Mark remaining services as skipped to keep the list stable
-    if (activeService && serviceStatuses.length < orderedServices.length) {
-      const checkedIds = new Set(serviceStatuses.map((s) => s.name));
-      orderedServices.forEach((service) => {
-        if (!checkedIds.has(service.name)) {
-          serviceStatuses.push({
-            priority: service.priority,
-            name: service.name,
-            healthUrl: service.healthUrl,
-            transcodeUrl: service.transcodeUrl,
-            isHealthy: false,
-            error: 'Skipped after healthy service found',
-            lastChecked: new Date().toISOString()
-          });
-        }
-      });
-    }
-    
+    const activeService = serviceStatuses.find((service) => service.isHealthy);
     const totalResponseTime = Date.now() - startTime;
     const healthyCount = serviceStatuses.filter(s => s.isHealthy).length;
     const totalCount = serviceStatuses.length;
+    const systemStatus = healthyCount === totalCount
+      ? 'operational'
+      : healthyCount > 0
+        ? 'degraded'
+        : 'down';
     
     const response = {
-      status: 'ok',
+      status: systemStatus,
       timestamp: new Date().toISOString(),
       totalResponseTime: `${totalResponseTime}ms`,
       summary: {
         healthyServices: healthyCount,
         totalServices: totalCount,
-        systemStatus: healthyCount > 0 ? 'operational' : 'degraded',
+        systemStatus,
         activeService: activeService ? {
           name: activeService.name,
           priority: activeService.priority,
