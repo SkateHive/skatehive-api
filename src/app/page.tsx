@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
 import "swagger-ui-react/swagger-ui.css";
 import "./swagger-theme.css";
+import TerminalShell from "./components/TerminalShell";
 
 // Dynamically import SwaggerUI with better loading
 const SwaggerUI = dynamic(() => import("swagger-ui-react"), {
@@ -76,15 +77,38 @@ export default function ApiDocs() {
     }
   }, []);
 
-  if (!mounted || loading) {
-    return <div className="swagger-loading">Loading API Documentation...</div>;
-  }
+  const status = !mounted || loading ? "loading…" : swaggerDoc ? "ready" : "error";
 
-  if (!swaggerDoc) {
-    return (
-      <div className="swagger-loading">Failed to load API Documentation</div>
-    );
-  }
+  return (
+    <TerminalShell
+      title="skatehive@api — documentation"
+      command="./serve-docs --spec=openapi.json"
+      active="docs"
+      right={status}
+    >
+      <section className="t-panel">
+        <div className="t-panel-head">
+          <span className="t-panel-title">api_reference</span>
+          <span className="t-panel-note">interactive openapi explorer</span>
+        </div>
+        <div className="swagger-host">
+          {!mounted || loading ? (
+            <div className="swagger-loading">Loading API Documentation...</div>
+          ) : !swaggerDoc ? (
+            <div className="swagger-loading">
+              Failed to load API Documentation
+            </div>
+          ) : (
+            <SwaggerUI spec={swaggerDoc} {...swaggerConfig} />
+          )}
+        </div>
+      </section>
 
-  return <SwaggerUI spec={swaggerDoc} {...swaggerConfig} />;
+      <style jsx>{`
+        .swagger-host {
+          padding: 4px;
+        }
+      `}</style>
+    </TerminalShell>
+  );
 }

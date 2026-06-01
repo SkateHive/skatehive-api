@@ -1,24 +1,20 @@
 // Shared configuration for transcode services
 // All servers run the same SkateHive video-transcoder codebase
-// Priority order: Mac Mini M4 (fastest) → Oracle (cloud) → Raspberry Pi (backup)
+// Priority order: Oracle (public IP, browser-reachable) → Mac Mini M4 (fallback)
+// NOTE: Mac Mini uses Tailscale Funnel which fails for large browser POST uploads.
+// Browsers cannot reach Tailscale Funnel URLs for multipart uploads, only health GETs via server-side proxy.
 export const TRANSCODE_SERVICES = [
   {
     priority: 1,
-    name: 'Mac Mini M4 (Primary)',
-    healthUrl: 'https://minivlad.tail83ea3e.ts.net/video/healthz',
-    transcodeUrl: 'https://minivlad.tail83ea3e.ts.net/video/transcode'
-  },
-  {
-    priority: 2,
-    name: 'Oracle (Secondary)',
+    name: 'Oracle (Primary)',
     healthUrl: 'https://transcode.skatehive.app/healthz',
     transcodeUrl: 'https://transcode.skatehive.app/transcode'
   },
   {
-    priority: 3,
-    name: 'Raspberry Pi (Fallback)',
-    healthUrl: 'https://vladsberry.tail83ea3e.ts.net/video/healthz',
-    transcodeUrl: 'https://vladsberry.tail83ea3e.ts.net/video/transcode'
+    priority: 2,
+    name: 'Mac Mini M4 (Secondary)',
+    healthUrl: 'https://minivlad.tail83ea3e.ts.net/video/healthz',
+    transcodeUrl: 'https://minivlad.tail83ea3e.ts.net/video/transcode'
   }
 ];
 

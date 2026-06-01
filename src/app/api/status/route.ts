@@ -5,6 +5,9 @@ export const dynamic = 'force-dynamic';
 
 type HealthStatus = 'operational' | 'degraded' | 'down';
 
+// Probe kinds for external dependencies that don't expose a /healthz JSON endpoint.
+type ProbeKind = 'hive-rpc' | 'eth-rpc' | 'supabase' | 'pinata';
+
 type ServiceDefinition = {
   id: string;
   name: string;
@@ -13,6 +16,7 @@ type ServiceDefinition = {
   healthUrl: string;
   priority?: number;
   headers?: Record<string, string>;
+  probe?: ProbeKind;
 };
 
 type ServiceHealth = ServiceDefinition & {
@@ -20,8 +24,6 @@ type ServiceHealth = ServiceDefinition & {
   responseTime?: number;
   error?: string;
   lastChecked: string;
-  authStatus?: string;
-  rcInfo?: string;
   cookieInfo?: {
     valid: boolean;
     exists: boolean;
@@ -33,11 +35,6 @@ type ServiceHealth = ServiceDefinition & {
 const HEALTH_TIMEOUT_MS = 5000;
 // Slow down health polling to avoid 429s on rate-limited services
 const CACHE_TTL_MS = 300000;
-
-const signerUrl = 'https://minivlad.tail83ea3e.ts.net';
-const signerToken =
-  process.env.NEXT_PUBLIC_SIGNER_TOKEN ||
-  'd1fa4884f3c12b49b922c96ad93413416e19a5dcde50499ee473c448622c54d9';
 
 const SERVICE_DEFINITIONS: ServiceDefinition[] = [
   {
@@ -54,29 +51,6 @@ const SERVICE_DEFINITIONS: ServiceDefinition[] = [
     description: 'Mac Mini Instagram downloader / helper',
     healthUrl: 'https://minivlad.tail83ea3e.ts.net/instagram/healthz',
   },
-  {
-    id: 'raspi-insta',
-    name: 'Raspberry Pi IG',
-    category: 'Instagram Downloader',
-    description: 'Raspberry Pi Instagram downloader / fallback',
-    healthUrl: 'https://vladsberry.tail83ea3e.ts.net/instagram/healthz',
-  },
-  {
-    id: 'vsc-node',
-    name: 'VSC Node',
-    category: 'Core / VSC',
-    description: 'VSC GraphQL node (HTTP 8080)',
-    // Funnel path to the VSC node; returns 404 but confirms the service is reachable
-    healthUrl: 'https://minivlad.tail83ea3e.ts.net/vsc/',
-  },
-  {
-    id: 'signup-signer',
-    name: 'Signup Signer',
-    category: 'SignUp',
-    description: 'Hive account manager / signer health',
-    healthUrl: `${signerUrl.replace(/\/$/, '')}/healthz`,
-    headers: { 'x-signer-token': signerToken },
-  },
   ...TRANSCODE_SERVICES.map((service) => ({
     id: `transcode-${service.priority}`,
     name: service.name,
@@ -85,11 +59,150 @@ const SERVICE_DEFINITIONS: ServiceDefinition[] = [
     healthUrl: service.healthUrl,
     priority: service.priority,
   })),
+
+  // ---- External dependencies (third-party infra Skatehive relies on) ----
+  {
+    id: 'hive-deathwing',
+    name: 'Hive · deathwing',
+    category: 'Hive RPC',
+    description: 'Hive blockchain RPC node',
+    healthUrl: 'https://api.deathwing.me',
+    probe: 'hive-rpc',
+    priority: 1,
+  },
+  {
+    id: 'hive-blog',
+    name: 'Hive · hive.blog',
+    category: 'Hive RPC',
+    description: 'Hive blockchain RPC node',
+    healthUrl: 'https://api.hive.blog',
+    probe: 'hive-rpc',
+    priority: 2,
+  },
+  {
+    id: 'hive-techcoderx',
+    name: 'Hive · techcoderx',
+    category: 'Hive RPC',
+    description: 'Hive blockchain RPC node',
+    healthUrl: 'https://techcoderx.com',
+    probe: 'hive-rpc',
+    priority: 3,
+  },
+  {
+    id: 'base-rpc',
+    name: 'Base Mainnet',
+    category: 'Web3 / EVM',
+    description: 'Base L2 RPC (DAO, NFTs, $token)',
+    healthUrl: 'https://mainnet.base.org',
+    probe: 'eth-rpc',
+  },
+  {
+    id: 'supabase',
+    name: 'Supabase',
+    category: 'Database',
+    description: 'Postgres · leaderboard / identities',
+    healthUrl: `${(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '').replace(/\/$/, '')}/auth/v1/health`,
+    probe: 'supabase',
+  },
+  {
+    id: 'pinata',
+    name: 'Pinata / IPFS',
+    category: 'Storage',
+    description: 'IPFS pinning + media gateway',
+    healthUrl: process.env.PINATA_JWT
+      ? 'https://api.pinata.cloud/data/testAuthentication'
+      : 'https://ipfs.skatehive.app',
+    probe: 'pinata',
+  },
 ];
 
 const ALL_SERVICES = SERVICE_DEFINITIONS;
 
 const healthCache: Record<string, ServiceHealth> = {};
+
+// Build a ServiceHealth result, merging the service definition with probe outcome.
+function buildResult(
+  service: ServiceDefinition,
+  isHealthy: boolean,
+  startTime: number,
+  error?: string
+): ServiceHealth {
+  return {
+    ...service,
+    isHealthy,
+    responseTime: Date.now() - startTime,
+    error: isHealthy ? undefined : error,
+    lastChecked: new Date().toISOString(),
+  };
+}
+
+// Probe an external dependency that has no shared /healthz contract.
+async function probeExternal(
+  service: ServiceDefinition,
+  signal: AbortSignal,
+  startTime: number
+): Promise<ServiceHealth> {
+  const jsonRpc = (method: string) =>
+    fetch(service.healthUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method, params: [], id: 1 }),
+      signal,
+    });
+
+  switch (service.probe) {
+    case 'hive-rpc': {
+      const res = await jsonRpc('condenser_api.get_dynamic_global_properties');
+      if (!res.ok) return buildResult(service, false, startTime, `HTTP ${res.status}`);
+      const data = await res.json().catch(() => ({}));
+      const head = data?.result?.head_block_number;
+      return head > 0
+        ? buildResult(service, true, startTime)
+        : buildResult(service, false, startTime, 'No head block in response');
+    }
+
+    case 'eth-rpc': {
+      const res = await jsonRpc('eth_blockNumber');
+      if (!res.ok) return buildResult(service, false, startTime, `HTTP ${res.status}`);
+      const data = await res.json().catch(() => ({}));
+      return typeof data?.result === 'string'
+        ? buildResult(service, true, startTime)
+        : buildResult(service, false, startTime, 'No block number in response');
+    }
+
+    case 'supabase': {
+      if (!service.healthUrl.startsWith('http')) {
+        return buildResult(service, false, startTime, 'SUPABASE_URL not configured');
+      }
+      const anon =
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const res = await fetch(service.healthUrl, {
+        headers: anon ? { apikey: anon } : undefined,
+        signal,
+      });
+      return res.ok
+        ? buildResult(service, true, startTime)
+        : buildResult(service, false, startTime, `HTTP ${res.status} ${res.statusText}`);
+    }
+
+    case 'pinata': {
+      const jwt = process.env.PINATA_JWT;
+      const res = await fetch(service.healthUrl, {
+        method: jwt ? 'GET' : 'HEAD',
+        headers: jwt ? { Authorization: `Bearer ${jwt}` } : undefined,
+        signal,
+      });
+      // Authenticated check expects 200; gateway reachability accepts anything < 500.
+      const ok = jwt ? res.ok : res.status < 500;
+      return ok
+        ? buildResult(service, true, startTime)
+        : buildResult(service, false, startTime, `HTTP ${res.status} ${res.statusText}`);
+    }
+
+    default:
+      return buildResult(service, false, startTime, 'Unknown probe');
+  }
+}
 
 async function checkHealth(service: ServiceDefinition): Promise<ServiceHealth> {
   const startTime = Date.now();
@@ -97,23 +210,10 @@ async function checkHealth(service: ServiceDefinition): Promise<ServiceHealth> {
   const timeoutId = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
 
   try {
-    // Special-case VSC node: it may not expose a health endpoint, so treat any reachable response (<500) as healthy
-    if (service.id === 'vsc-node') {
-      const response = await fetch(service.healthUrl, {
-        signal: controller.signal,
-        headers: service.headers,
-      });
+    if (service.probe) {
+      const result = await probeExternal(service, controller.signal, startTime);
       clearTimeout(timeoutId);
-      const responseTime = Date.now() - startTime;
-
-      const okFlag = response.status < 500; // reachable service, even if it returns 404
-      return {
-        ...service,
-        isHealthy: okFlag,
-        responseTime,
-        lastChecked: new Date().toISOString(),
-        error: okFlag ? undefined : `HTTP ${response.status} ${response.statusText}`,
-      };
+      return result;
     }
 
     const response = await fetch(service.healthUrl, {
@@ -134,72 +234,6 @@ async function checkHealth(service: ServiceDefinition): Promise<ServiceHealth> {
     }
 
     const data = await response.json().catch(() => ({}));
-
-    // Special handling for signer health to include auth + RC context
-    if (service.id === 'signup-signer') {
-      const authStatus = data.auth ?? 'unknown';
-
-      // Auth failures
-      if (authStatus === 'invalid' || authStatus === 'not-provided') {
-        return {
-          ...service,
-          isHealthy: false,
-          responseTime,
-          lastChecked: new Date().toISOString(),
-          authStatus,
-          error: authStatus === 'invalid'
-            ? 'Invalid signer token'
-            : 'Signer token not configured',
-        };
-      }
-
-      // If auth ok, attempt lightweight RC probe
-      if (data.status === 'ok' && authStatus === 'valid') {
-        try {
-          const probe = await fetch(`${signerUrl.replace(/\/$/, '')}/claim-account`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-signer-token': signerToken,
-            },
-            body: JSON.stringify({ username: `healthcheck-test-${Date.now()}` }),
-          });
-          const probeJson = await probe.json().catch(() => ({}));
-
-          // Detect RC issues
-          if (probeJson?.error && typeof probeJson.error === 'string' && probeJson.error.toLowerCase().includes('insufficient')) {
-            const match = probeJson.hive_error?.match(/has (\d+) RC, needs (\d+) RC/i);
-            const rcInfo = match
-              ? `RC: ${(parseInt(match[1], 10) / 1e12).toFixed(1)}T / ${(parseInt(match[2], 10) / 1e12).toFixed(1)}T needed`
-              : 'Insufficient Resource Credits';
-
-            return {
-              ...service,
-              isHealthy: false,
-              responseTime,
-              lastChecked: new Date().toISOString(),
-              authStatus,
-              rcInfo,
-              error: rcInfo,
-            };
-          }
-        } catch {
-          // ignore probe failure, fall through as operational with unknown RC
-        }
-      }
-
-      // Auth valid and no RC error detected
-      const okFlag = data.ok === true || data.healthy === true || data.status === 'ok';
-      return {
-        ...service,
-        isHealthy: okFlag || response.ok,
-        responseTime,
-        lastChecked: new Date().toISOString(),
-        authStatus,
-        rcInfo: data.rcInfo,
-        error: okFlag ? undefined : 'Signer health did not report ok',
-      };
-    }
 
     // Special handling for Instagram services to extract cookie information
     if (service.category === 'Instagram Downloader' && data.authentication) {
