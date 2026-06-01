@@ -105,7 +105,7 @@ export default function StackPage() {
               <span className="dollar">$</span>{" "}
               <span className="cmd">./topology --render</span>
             </p>
-            <h1 className="arch-title">// the stack that powers skatehive</h1>
+            <h1 className="arch-title">{"// the stack that powers skatehive"}</h1>
             <p className="arch-sub">
               open-source, decentralized, and skater-owned — from upload to feed.
             </p>

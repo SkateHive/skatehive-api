@@ -426,7 +426,7 @@ export default function Leaderboard() {
           </div>
 
           {!loading && sortedLeaderboard.length === 0 && (
-            <p className="t-muted empty">// no skaters match the filter</p>
+            <p className="t-muted empty">{"// no skaters match the filter"}</p>
           )}
         </div>
       </section>

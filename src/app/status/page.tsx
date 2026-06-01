@@ -202,7 +202,7 @@ export default function StatusPage() {
         </div>
 
         {machines.length === 0 && !loading ? (
-          <p className="empty">// no services to display</p>
+          <p className="empty">{"// no services to display"}</p>
         ) : (
           machines.map((machine) => {
             const up = machine.services.filter((s) => s.isHealthy).length;
@@ -920,7 +920,7 @@ function LogsSection() {
           <span className="dollar">$</span>{" "}
           <span className="cmd">tail -f ./logs --sanitized</span>
         </p>
-        <h2 className="logs-title">// recent worker activity</h2>
+        <h2 className="logs-title">{"// recent worker activity"}</h2>
         <p className="logs-sub">
           live from the transcode + ingestion nodes · IPs, handles, filenames
           and CIDs are stripped or masked server-side.
