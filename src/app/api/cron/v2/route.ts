@@ -6,8 +6,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchCommunityPosts } from '@/app/utils/hive/fetchCommunityPosts';
 import { fetchCommunitySnaps } from '@/app/utils/hive/fetchCommunitySnaps';
 import { calculateAndUpsertPoints, calculateAndUpsertPointsBatch, fetchAndUpsertAccountData, removeUnsubscribedAuthors, upsertAuthors } from './dataManager';
+import { checkCronAuth } from '@/app/utils/cronAuth';
 
-export async function GET() {
+export async function GET(req: Request) {
+    const unauthorized = checkCronAuth(req);
+    if (unauthorized) return unauthorized;
+
     try {
         const updatedUsers = await updateLeaderboardData();
         return NextResponse.json({

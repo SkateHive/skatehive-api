@@ -1,6 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
-import { supabase } from "../utils/supabase/supabaseClient";
+import { useState, useEffect, useCallback } from "react";
 import TerminalShell from "../components/TerminalShell";
 
 interface LeaderboardRow {
@@ -46,10 +45,10 @@ function pointsBreakdown(row: LeaderboardRow): string {
       row.last_post
         ? Math.floor(
             (Date.now() - new Date(row.last_post).getTime()) /
-              (1000 * 60 * 60 * 24)
+              (1000 * 60 * 60 * 24),
           )
         : 100,
-      100
+      100,
     ) +
     (row.giveth_donations_usd !== null
       ? Math.min(row.giveth_donations_usd, 1000) * 5
@@ -103,31 +102,90 @@ export default function Leaderboard() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastLoaded, setLastLoaded] = useState<string>("--:--:--");
+
+  // Admin-only recompute controls are hidden unless the page is opened with ?admin=1
+  const [showAdmin, setShowAdmin] = useState(false);
+  const [recomputing, setRecomputing] = useState(false);
+  const [recomputeMsg, setRecomputeMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchData = async () => {
-      if (!supabase) {
-        console.error("Supabase client not initialized");
-        setLoading(false);
-        return;
-      }
-      const { data, error } = await supabase
-        .from(process.env.NEXT_PUBLIC_SUPABASE_DB || "leaderboard")
-        .select("*");
-      if (error) {
-        console.error("Error fetching leaderboard:", error);
-      } else {
-        setLeaderboard(data as LeaderboardRow[]);
-      }
-      setLoading(false);
-    };
-    fetchData();
+    setShowAdmin(
+      new URLSearchParams(window.location.search).get("admin") === "1",
+    );
   }, []);
+
+  // Re-fetch existing rows from the read API (no recomputation).
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/v2/leaderboard");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as LeaderboardRow[];
+      setLeaderboard(Array.isArray(data) ? data : []);
+      setLastLoaded(new Date().toLocaleTimeString([], { hour12: false }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load leaderboard");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Admin action: trigger the recompute cron, then refresh the display.
+  // The CRON_SECRET is entered by the operator at action time and kept only in
+  // sessionStorage — it is never bundled into the client code.
+  const recompute = useCallback(async () => {
+    if (
+      !window.confirm(
+        "Trigger a leaderboard recompute? This is an expensive job that refreshes a batch of the stalest accounts. Continue?",
+      )
+    ) {
+      return;
+    }
+
+    let secret = sessionStorage.getItem("cron_secret") || "";
+    if (!secret) {
+      secret =
+        window.prompt("Enter CRON_SECRET to authorize the recompute:") || "";
+      if (!secret) return;
+      sessionStorage.setItem("cron_secret", secret);
+    }
+
+    setRecomputing(true);
+    setRecomputeMsg(null);
+    try {
+      const res = await fetch("/api/cron/v2", {
+        headers: { Authorization: `Bearer ${secret}` },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        sessionStorage.removeItem("cron_secret"); // bad secret — clear so next try re-prompts
+        throw new Error("unauthorized (check CRON_SECRET)");
+      }
+      if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+      setRecomputeMsg(
+        `recompute ok · ${body?.updatedUsersCount ?? 0} accounts updated`,
+      );
+      await load();
+    } catch (e) {
+      setRecomputeMsg(
+        `recompute failed · ${e instanceof Error ? e.message : "unknown error"}`,
+      );
+    } finally {
+      setRecomputing(false);
+    }
+  }, [load]);
 
   const formatEthAddress = (a: string) => `${a.slice(0, 6)}...${a.slice(-4)}`;
 
   const filteredLeaderboard = leaderboard.filter((row) =>
-    row.hive_author.toLowerCase().includes(searchTerm.toLowerCase())
+    row.hive_author.toLowerCase().includes(searchTerm.toLowerCase()),
   );
 
   const sortedLeaderboard = [...filteredLeaderboard].sort((a, b) => {
@@ -151,7 +209,9 @@ export default function Leaderboard() {
     sortField === field ? (sortOrder === "asc" ? " ▲" : " ▼") : "";
 
   const dayAgo = new Date(new Date().setDate(new Date().getDate() - 1));
-  const yearAgo = new Date(new Date().setFullYear(new Date().getFullYear() - 1));
+  const yearAgo = new Date(
+    new Date().setFullYear(new Date().getFullYear() - 1),
+  );
 
   return (
     <TerminalShell
@@ -163,11 +223,33 @@ export default function Leaderboard() {
       <section className="t-panel">
         <div className="t-panel-head">
           <span className="t-panel-title">skater_ranking</span>
+          <button className="t-btn" onClick={load} disabled={loading}>
+            {loading ? "loading…" : "↻ refresh"}
+          </button>
+          {showAdmin && (
+            <button
+              className="t-btn admin-btn"
+              onClick={recompute}
+              disabled={recomputing || loading}
+              title="Admin: triggers /api/cron/v2 — expensive recompute"
+            >
+              {recomputing ? "recomputing…" : "⚙ recompute (admin)"}
+            </button>
+          )}
           <span className="t-panel-note">
-            {sortedLeaderboard.length} skaters supporting ourselves
+            {sortedLeaderboard.length} skaters · updated {lastLoaded}
           </span>
         </div>
         <div className="t-panel-body">
+          {error && <p className="t-bad load-msg">! load error: {error}</p>}
+          {recomputeMsg && (
+            <p
+              className={`load-msg ${recomputeMsg.startsWith("recompute ok") ? "t-ok" : "t-bad"}`}
+            >
+              {recomputeMsg}
+            </p>
+          )}
+
           <div className="search-row">
             <span className="search-label">grep&gt;</span>
             <input
@@ -218,7 +300,7 @@ export default function Leaderboard() {
                             ? "t-muted"
                             : tone(
                                 row.max_voting_power_usd > 0.5,
-                                row.max_voting_power_usd >= 0.05
+                                row.max_voting_power_usd >= 0.05,
                               )
                         }
                       >
@@ -227,7 +309,7 @@ export default function Leaderboard() {
                       <td
                         className={tone(
                           (row.hive_balance ?? 0) > 500,
-                          (row.hive_balance ?? 0) >= 100
+                          (row.hive_balance ?? 0) >= 100,
                         )}
                       >
                         {row.hive_balance ?? "N/A"}
@@ -235,7 +317,7 @@ export default function Leaderboard() {
                       <td
                         className={tone(
                           (row.hp_balance ?? 0) >= 2000,
-                          (row.hp_balance ?? 0) >= 500
+                          (row.hp_balance ?? 0) >= 500,
                         )}
                       >
                         {row.hp_balance ?? "N/A"}
@@ -243,7 +325,7 @@ export default function Leaderboard() {
                       <td
                         className={tone(
                           (row.hbd_balance ?? 0) > 500,
-                          (row.hbd_balance ?? 0) >= 100
+                          (row.hbd_balance ?? 0) >= 100,
                         )}
                       >
                         {row.hbd_balance ?? "N/A"}
@@ -251,7 +333,7 @@ export default function Leaderboard() {
                       <td
                         className={tone(
                           (row.hbd_savings_balance ?? 0) > 500,
-                          (row.hbd_savings_balance ?? 0) >= 100
+                          (row.hbd_savings_balance ?? 0) >= 100,
                         )}
                       >
                         {row.hbd_savings_balance ?? "N/A"}
@@ -270,7 +352,7 @@ export default function Leaderboard() {
                       <td
                         className={tone(
                           (row.gnars_balance ?? 0) > 10,
-                          (row.gnars_balance ?? 0) > 0
+                          (row.gnars_balance ?? 0) > 0,
                         )}
                       >
                         {row.gnars_balance ?? "N/A"}
@@ -278,7 +360,7 @@ export default function Leaderboard() {
                       <td
                         className={tone(
                           (row.gnars_votes ?? 0) > 10,
-                          (row.gnars_votes ?? 0) > 0
+                          (row.gnars_votes ?? 0) > 0,
                         )}
                       >
                         {row.gnars_votes ?? "N/A"}
@@ -286,12 +368,14 @@ export default function Leaderboard() {
                       <td
                         className={tone(
                           (row.skatehive_nft_balance ?? 0) > 10,
-                          (row.skatehive_nft_balance ?? 0) > 0
+                          (row.skatehive_nft_balance ?? 0) > 0,
                         )}
                       >
                         {row.skatehive_nft_balance ?? "N/A"}
                       </td>
-                      <td className={row.has_voted_in_witness ? "t-ok" : "t-bad"}>
+                      <td
+                        className={row.has_voted_in_witness ? "t-ok" : "t-bad"}
+                      >
                         {row.has_voted_in_witness ? "yes" : "no"}
                       </td>
                       <td
@@ -369,6 +453,18 @@ export default function Leaderboard() {
         }
         .empty {
           margin-top: 16px;
+        }
+        .load-msg {
+          font-size: 12px;
+          margin-bottom: 12px;
+        }
+        .admin-btn {
+          color: var(--amber);
+          border-color: var(--amber);
+        }
+        .admin-btn:hover:not(:disabled) {
+          background: var(--amber);
+          color: #1a1200;
         }
       `}</style>
     </TerminalShell>

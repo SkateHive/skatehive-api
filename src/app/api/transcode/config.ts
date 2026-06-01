@@ -1,3 +1,4 @@
+// TODO: Verify if the macmini limitation is true 
 // Shared configuration for transcode services
 // All servers run the same SkateHive video-transcoder codebase
 // Priority order: Oracle (public IP, browser-reachable) → Mac Mini M4 (fallback)

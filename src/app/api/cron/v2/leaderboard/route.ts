@@ -1,7 +1,11 @@
 import { getLeaderboard } from '@/app/utils/supabase/getLeaderboard';
 import { NextRequest, NextResponse } from 'next/server';
+import { checkCronAuth } from '@/app/utils/cronAuth';
 
 export async function GET(req: Request) {
+  const unauthorized = checkCronAuth(req);
+  if (unauthorized) return unauthorized;
+
   try {
     const { searchParams } = new URL(req.url);
     const sortBy = searchParams.get('sort'); // 'points' or 'posts_count'

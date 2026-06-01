@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchAndStorePartialData } from '@/app/api/cron/v2/dataManager';
+import { checkCronAuth } from '@/app/utils/cronAuth';
 
-export async function GET() {
+export async function GET(req: Request) {
+    const unauthorized = checkCronAuth(req);
+    if (unauthorized) return unauthorized;
+
     try {
         // Call your data fetch and store function
         await fetchAndStorePartialData();

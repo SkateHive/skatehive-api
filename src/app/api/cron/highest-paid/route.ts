@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { fetchHighestPaidPostsWithRanking } from '@/app/utils/hive/fetchHighestPaidPosts';
 import { setHighestPaidCache, getHighestPaidCache } from '@/app/utils/highestPaidCache';
+import { checkCronAuth } from '@/app/utils/cronAuth';
 
 /**
  * Cron endpoint to update the highest paid posts cache
@@ -17,6 +18,9 @@ import { setHighestPaidCache, getHighestPaidCache } from '@/app/utils/highestPai
  * - community: Community code (default: hive-173115)
  */
 export async function GET(request: Request) {
+    const unauthorized = checkCronAuth(request);
+    if (unauthorized) return unauthorized;
+
     const startTime = Date.now();
 
     try {
