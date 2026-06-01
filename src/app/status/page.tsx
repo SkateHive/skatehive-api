@@ -1,7 +1,8 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
-import type { CSSProperties } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import Nav from "../components/Nav";
 
 type HealthStatus = "operational" | "degraded" | "down";
 
@@ -145,6 +146,8 @@ export default function StatusPage() {
   return (
     <div className="wrapper">
       <div className="shell">
+        <Nav active="status" />
+
         {/* terminal window chrome */}
         <div className="window">
           <div className="titlebar">
@@ -275,7 +278,17 @@ export default function StatusPage() {
           })
         )}
 
-        <Architecture />
+        <LogsSection />
+
+        <Link href="/stack" className="stack-link">
+          <span className="stack-link-text">
+            <span className="stack-link-title">{"> view the full stack"}</span>
+            <span className="stack-link-sub">
+              architecture topology — clients → services → storage → protocol
+            </span>
+          </span>
+          <span className="stack-link-arrow">→</span>
+        </Link>
 
         <footer className="foot">
           <span>skatehive.app // systems monitor</span>
@@ -687,6 +700,42 @@ export default function StatusPage() {
           color: var(--muted);
         }
 
+        .stack-link {
+          margin-top: 26px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          border: 1px solid var(--line);
+          border-left: 3px solid var(--green-dim);
+          background: var(--panel);
+          padding: 16px 18px;
+          transition: border-color 0.15s ease, transform 0.15s ease;
+        }
+        .stack-link:hover {
+          border-left-color: var(--green);
+          transform: translateY(-2px);
+        }
+        .stack-link-text {
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+        }
+        .stack-link-title {
+          color: var(--green);
+          font-weight: 700;
+          font-size: 15px;
+        }
+        .stack-link-sub {
+          color: var(--muted);
+          font-size: 12px;
+        }
+        .stack-link-arrow {
+          color: var(--green);
+          font-size: 20px;
+          font-weight: 700;
+        }
+
         .foot {
           margin-top: 30px;
           display: flex;
@@ -793,163 +842,172 @@ function respClass(ms: number): string {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Architecture flowchart — the tech that powers Skatehive                   */
+/*  Logs — sanitized worker activity from /api/logs                           */
 /* -------------------------------------------------------------------------- */
 
-type IconName =
-  | "globe"
-  | "phone"
-  | "gauge"
-  | "server"
-  | "film"
-  | "download"
-  | "box"
-  | "database"
-  | "chain"
-  | "diamond"
-  | "hex";
+type SourceType = "transcode" | "instagram";
 
-type ArchNode = { icon: IconName; name: string; tech: string };
-
-type ArchLayer = {
-  id: string;
-  index: string;
-  label: string;
-  color: string;
-  desc: string;
-  nodes: ArchNode[];
+type SafeEntry = {
+  source: string;
+  type: SourceType;
+  time: string;
+  status: string;
+  success: boolean | null;
+  durationMs?: number;
+  sizeBytes?: number;
+  user: string;
+  fileExt?: string;
+  shortCid?: string;
+  platform?: string;
 };
 
-const ARCH_LAYERS: ArchLayer[] = [
-  {
-    id: "clients",
-    index: "01",
-    label: "clients",
-    color: "var(--green)",
-    desc: "what skaters touch",
-    nodes: [
-      { icon: "globe", name: "skatehive.app", tech: "Next.js 15 · web" },
-      { icon: "phone", name: "mobile app", tech: "Expo · React Native" },
-      { icon: "gauge", name: "dashboard", tech: "Next.js · admin" },
-    ],
-  },
-  {
-    id: "services",
-    index: "02",
-    label: "services",
-    color: "var(--blue)",
-    desc: "self-hosted · Mac Mini M4 + RPi 5 · Tailscale mesh",
-    nodes: [
-      { icon: "server", name: "skatehive-api", tech: "Hive aggregator · feed" },
-      { icon: "film", name: "video-transcoder", tech: "FFmpeg → H.264 / MP4" },
-      { icon: "download", name: "insta-downloader", tech: "yt-dlp ingestion" },
-    ],
-  },
-  {
-    id: "storage",
-    index: "03",
-    label: "storage & index",
-    color: "var(--amber)",
-    desc: "where media + data live",
-    nodes: [
-      { icon: "box", name: "IPFS / Pinata", tech: "media files · CIDs" },
-      { icon: "database", name: "Supabase", tech: "Postgres · leaderboard" },
-    ],
-  },
-  {
-    id: "protocol",
-    index: "04",
-    label: "protocol",
-    color: "var(--purple)",
-    desc: "decentralized source of truth",
-    nodes: [
-      { icon: "chain", name: "Hive", tech: "posts · votes · rewards" },
-      { icon: "diamond", name: "Base / Ethereum", tech: "DAO · NFTs · $token" },
-      { icon: "hex", name: "Farcaster", tech: "auth · frames" },
-    ],
-  },
-];
+type SourceSummary = {
+  id: string;
+  name: string;
+  type: SourceType;
+  reachable: boolean;
+  total?: number;
+  successful?: number;
+  failed?: number;
+  inProgress?: number;
+  successRate?: number;
+  error?: string;
+};
 
-const JOURNEY = [
-  "capture",
-  "transcode / ingest",
-  "pin to IPFS",
-  "post to Hive",
-  "api indexes",
-  "hits the feed",
-];
+type LogsResponse = {
+  timestamp: string;
+  sources: SourceSummary[];
+  entries: SafeEntry[];
+};
 
-function Architecture() {
+const LOGS_POLL_MS = 30000;
+
+function LogsSection() {
+  const [data, setData] = useState<LogsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async (bg = false) => {
+    if (!bg) setLoading(true);
+    try {
+      const res = await fetch("/api/logs");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = (await res.json()) as LogsResponse;
+      setData(json);
+      setErr(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "failed to load logs");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    const id = setInterval(() => load(true), LOGS_POLL_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  const entries = data?.entries ?? [];
+  const sources = data?.sources ?? [];
+
   return (
-    <section className="arch">
-      <div className="arch-head">
+    <section className="logs">
+      <div className="logs-head">
         <p className="prompt">
           <span className="user">root@skatehive</span>
           <span className="path">:~/services</span>
           <span className="dollar">$</span>{" "}
-          <span className="cmd">./topology --render</span>
+          <span className="cmd">tail -f ./logs --sanitized</span>
         </p>
-        <h2 className="arch-title">// the stack that powers skatehive</h2>
-        <p className="arch-sub">
-          open-source, decentralized, and skater-owned — from upload to feed.
+        <h2 className="logs-title">// recent worker activity</h2>
+        <p className="logs-sub">
+          live from the transcode + ingestion nodes · IPs, handles, filenames
+          and CIDs are stripped or masked server-side.
         </p>
       </div>
 
-      <div className="arch-flow">
-        {ARCH_LAYERS.map((layer, i) => (
-          <Fragment key={layer.id}>
-            <div className="layer" style={{ "--accent": layer.color } as CSSProperties}>
-              <div className="layer-label">
-                <span className="layer-index">{layer.index}</span>
-                <span className="layer-name">{layer.label}</span>
-                <span className="layer-desc">{layer.desc}</span>
+      {sources.length > 0 && (
+        <div className="logs-sources">
+          {sources.map((s) => (
+            <div className="lsource" key={s.id}>
+              <div className="lsource-top">
+                <span
+                  className={`lsource-led ${s.reachable ? "tone-ok" : "tone-down"}`}
+                />
+                <span className="lsource-name">{s.name}</span>
               </div>
-              <div className="layer-nodes">
-                {layer.nodes.map((node) => (
-                  <div className="anode" key={node.name}>
-                    <span className="anode-icon">
-                      <Icon name={node.icon} />
+              {s.reachable ? (
+                <div className="lsource-stats">
+                  {s.successful != null && (
+                    <span className="ok">{s.successful} ok</span>
+                  )}
+                  {s.failed != null && (
+                    <span className={s.failed > 0 ? "down" : "muted"}>
+                      {s.failed} fail
                     </span>
-                    <span className="anode-text">
-                      <span className="anode-name">{node.name}</span>
-                      <span className="anode-tech">{node.tech}</span>
-                    </span>
-                  </div>
-                ))}
-              </div>
+                  )}
+                  {s.inProgress != null && s.inProgress > 0 && (
+                    <span className="warn">{s.inProgress} live</span>
+                  )}
+                  {s.successRate != null && (
+                    <span className="muted">{s.successRate}% rate</span>
+                  )}
+                </div>
+              ) : (
+                <div className="lsource-stats">
+                  <span className="down">unreachable</span>
+                </div>
+              )}
             </div>
-
-            {i < ARCH_LAYERS.length - 1 && (
-              <div className="connector" aria-hidden>
-                <span className="conn-line" />
-                <span className="packet" />
-                <span className="chev">▼</span>
-              </div>
-            )}
-          </Fragment>
-        ))}
-      </div>
-
-      <div className="journey">
-        <span className="journey-label">content journey</span>
-        <div className="journey-track">
-          {JOURNEY.map((step, i) => (
-            <Fragment key={step}>
-              <span className="journey-step">{step}</span>
-              {i < JOURNEY.length - 1 && <span className="journey-arrow">▶</span>}
-            </Fragment>
           ))}
         </div>
+      )}
+
+      <div className="logstream">
+        {entries.length === 0 ? (
+          <p className="logs-empty">
+            {loading ? "// fetching logs…" : err ? `! ${err}` : "// no recent activity"}
+          </p>
+        ) : (
+          entries.map((e, i) => {
+            const tone =
+              e.success === true ? "ok" : e.success === false ? "down" : "warn";
+            const badge =
+              e.success === true
+                ? "done"
+                : e.success === false
+                  ? "fail"
+                  : e.status.slice(0, 7) || "live";
+            const detail = [
+              e.fileExt,
+              e.sizeBytes != null ? fmtBytes(e.sizeBytes) : undefined,
+              e.durationMs != null ? fmtDuration(e.durationMs) : undefined,
+              e.shortCid,
+            ]
+              .filter(Boolean)
+              .join(" · ");
+
+            return (
+              <div className="logline" key={`${e.source}-${e.time}-${i}`}>
+                <span className="ll-time">{fmtClock(e.time)}</span>
+                <span className="ll-src">{sourceTag(e.source)}</span>
+                <span className={`ll-badge tone-${tone}`}>{badge}</span>
+                <span className="ll-user">{e.user}</span>
+                <span className="ll-detail">{detail || "—"}</span>
+              </div>
+            );
+          })
+        )}
       </div>
 
       <style jsx>{`
-        .arch {
-          margin-top: 40px;
+        .logs {
+          margin-top: 26px;
           border: 1px solid var(--line);
           background: var(--panel);
         }
-
-        .arch-head {
+        .logs-head {
           padding: 18px 18px 4px;
         }
         .prompt {
@@ -967,202 +1025,135 @@ function Architecture() {
         .dollar {
           color: var(--muted);
         }
-        .arch-title {
+        .logs-title {
           margin-top: 12px;
           font-size: clamp(16px, 2.6vw, 22px);
           font-weight: 700;
           color: var(--green);
-          letter-spacing: 0.01em;
         }
-        .arch-sub {
+        .logs-sub {
           margin-top: 4px;
           color: var(--muted);
           font-size: 13px;
         }
 
-        .arch-flow {
-          padding: 14px 18px 6px;
-        }
-
-        /* ---- layer band ---- */
-        .layer {
-          border: 1px solid var(--line);
-          border-left: 3px solid var(--accent);
-          background: #0a0e0a;
-          padding: 12px 14px 14px;
-        }
-
-        .layer-label {
-          display: flex;
-          align-items: baseline;
-          flex-wrap: wrap;
-          gap: 10px;
-          margin-bottom: 12px;
-        }
-        .layer-index {
-          color: var(--accent);
-          font-weight: 700;
-          font-size: 12px;
-          opacity: 0.8;
-        }
-        .layer-name {
-          color: var(--accent);
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.16em;
-          font-size: 13px;
-        }
-        .layer-desc {
-          color: var(--muted);
-          font-size: 12px;
-        }
-
-        .layer-nodes {
+        .logs-sources {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
           gap: 10px;
+          padding: 14px 18px 4px;
         }
-
-        .anode {
+        .lsource {
+          border: 1px solid var(--line);
+          background: #0a0e0a;
+          padding: 10px 12px;
+        }
+        .lsource-top {
           display: flex;
           align-items: center;
-          gap: 12px;
-          border: 1px solid var(--line);
-          background: #0c110c;
-          padding: 12px 13px;
-          transition: border-color 0.15s ease, transform 0.15s ease,
-            box-shadow 0.15s ease;
+          gap: 8px;
+          margin-bottom: 6px;
         }
-        .anode:hover {
-          border-color: var(--accent);
-          transform: translateY(-2px);
-          box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+        .lsource-led {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+        }
+        .lsource-led.tone-ok {
+          background: var(--green);
+          box-shadow: 0 0 6px rgba(141, 255, 58, 0.7);
+        }
+        .lsource-led.tone-down {
+          background: var(--red);
+          box-shadow: 0 0 6px rgba(255, 92, 92, 0.6);
+        }
+        .lsource-name {
+          color: var(--text);
+          font-weight: 700;
+          font-size: 13px;
+        }
+        .lsource-stats {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          font-size: 12px;
         }
 
-        .anode-icon {
-          flex: none;
-          width: 38px;
-          height: 38px;
-          display: grid;
-          place-items: center;
-          border: 1px solid var(--accent);
-          color: var(--accent);
-          background: rgba(0, 0, 0, 0.25);
-        }
-        .anode-icon :global(svg) {
-          width: 20px;
-          height: 20px;
-        }
-
-        .anode-text {
+        .logstream {
+          padding: 10px 18px 18px;
           display: flex;
           flex-direction: column;
-          gap: 2px;
-          min-width: 0;
         }
-        .anode-name {
-          color: var(--text);
-          font-weight: 700;
-          font-size: 14px;
-        }
-        .anode-tech {
+        .logs-empty {
           color: var(--muted);
-          font-size: 11px;
+          padding: 8px 0;
         }
-
-        /* ---- connectors between layers ---- */
-        .connector {
-          position: relative;
-          height: 34px;
+        .logline {
           display: grid;
-          place-items: center;
-        }
-        .conn-line {
-          position: absolute;
-          top: 0;
-          bottom: 0;
-          width: 1px;
-          background: linear-gradient(
-            180deg,
-            transparent,
-            var(--line) 20%,
-            var(--line) 80%,
-            transparent
-          );
-        }
-        .chev {
-          color: var(--green-dim);
-          font-size: 12px;
-          line-height: 1;
-          background: var(--panel);
-          padding: 2px 0;
-          z-index: 1;
-        }
-        .packet {
-          position: absolute;
-          top: 2px;
-          width: 5px;
-          height: 5px;
-          border-radius: 50%;
-          background: var(--green);
-          box-shadow: 0 0 8px var(--green);
-          animation: drop 2.4s ease-in-out infinite;
-        }
-        @keyframes drop {
-          0% {
-            transform: translateY(0);
-            opacity: 0;
-          }
-          15% {
-            opacity: 1;
-          }
-          85% {
-            opacity: 1;
-          }
-          100% {
-            transform: translateY(28px);
-            opacity: 0;
-          }
-        }
-
-        /* ---- content journey ---- */
-        .journey {
-          margin: 8px 18px 20px;
-          border: 1px solid var(--line);
-          border-top: 2px solid var(--green-dim);
-          background: #0a0e0a;
-          padding: 14px;
-        }
-        .journey-label {
-          display: block;
-          color: var(--muted);
-          font-size: 10px;
-          text-transform: uppercase;
-          letter-spacing: 0.18em;
-          margin-bottom: 10px;
-        }
-        .journey-track {
-          display: flex;
+          grid-template-columns: 78px 96px 54px 90px 1fr;
+          gap: 10px;
           align-items: center;
-          flex-wrap: wrap;
-          gap: 8px 10px;
-        }
-        .journey-step {
-          color: var(--text);
+          padding: 7px 0;
+          border-bottom: 1px solid var(--line-soft);
           font-size: 13px;
-          border: 1px solid var(--line);
-          padding: 5px 11px;
-          background: #0c110c;
           white-space: nowrap;
         }
-        .journey-arrow {
-          color: var(--green);
-          font-size: 11px;
+        .logline:last-child {
+          border-bottom: none;
+        }
+        .ll-time {
+          color: var(--muted);
+          font-size: 12px;
+        }
+        .ll-src {
+          color: var(--blue);
+          font-size: 12px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .ll-badge {
+          font-weight: 700;
+          font-size: 12px;
+        }
+        .ll-user {
+          color: var(--text);
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .ll-detail {
+          color: var(--muted);
+          font-size: 12px;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
-        @media (max-width: 640px) {
-          .layer-nodes {
-            grid-template-columns: 1fr;
+        .tone-ok,
+        .ok {
+          color: var(--green);
+        }
+        .tone-warn,
+        .warn {
+          color: var(--amber);
+        }
+        .tone-down,
+        .down {
+          color: var(--red);
+        }
+        .muted {
+          color: var(--muted);
+        }
+
+        @media (max-width: 680px) {
+          .logline {
+            grid-template-columns: 64px 1fr auto;
+            gap: 6px 8px;
+          }
+          .ll-user {
+            grid-column: 2;
+          }
+          .ll-detail {
+            grid-column: 1 / -1;
+            white-space: normal;
           }
         }
       `}</style>
@@ -1170,101 +1161,32 @@ function Architecture() {
   );
 }
 
-function Icon({ name }: { name: IconName }) {
-  const common = {
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.6,
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
-  };
-  switch (name) {
-    case "globe":
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M3 12h18" />
-          <path d="M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" />
-        </svg>
-      );
-    case "phone":
-      return (
-        <svg {...common}>
-          <rect x="7" y="2.5" width="10" height="19" rx="2" />
-          <line x1="10.5" y1="18.5" x2="13.5" y2="18.5" />
-        </svg>
-      );
-    case "gauge":
-      return (
-        <svg {...common}>
-          <path d="M4 18a8 8 0 1 1 16 0" />
-          <line x1="12" y1="18" x2="15.5" y2="11.5" />
-          <circle cx="12" cy="18" r="1.2" />
-        </svg>
-      );
-    case "server":
-      return (
-        <svg {...common}>
-          <rect x="3" y="4" width="18" height="7" rx="1.5" />
-          <rect x="3" y="13" width="18" height="7" rx="1.5" />
-          <line x1="6.5" y1="7.5" x2="6.5" y2="7.5" />
-          <line x1="6.5" y1="16.5" x2="6.5" y2="16.5" />
-        </svg>
-      );
-    case "film":
-      return (
-        <svg {...common}>
-          <rect x="3" y="4" width="18" height="16" rx="1.5" />
-          <line x1="8" y1="4" x2="8" y2="20" />
-          <line x1="16" y1="4" x2="16" y2="20" />
-          <line x1="3" y1="12" x2="21" y2="12" />
-        </svg>
-      );
-    case "download":
-      return (
-        <svg {...common}>
-          <path d="M12 3v12" />
-          <path d="M7 11l5 5 5-5" />
-          <path d="M4 21h16" />
-        </svg>
-      );
-    case "box":
-      return (
-        <svg {...common}>
-          <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" />
-          <path d="M4 7.5 12 12l8-4.5" />
-          <path d="M12 12v9" />
-        </svg>
-      );
-    case "database":
-      return (
-        <svg {...common}>
-          <ellipse cx="12" cy="5" rx="7" ry="3" />
-          <path d="M5 5v14c0 1.7 3.1 3 7 3s7-1.3 7-3V5" />
-          <path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3" />
-        </svg>
-      );
-    case "chain":
-      return (
-        <svg {...common}>
-          <path d="M9.5 12a3 3 0 0 1 3-3h2a3 3 0 0 1 0 6h-1" />
-          <path d="M14.5 12a3 3 0 0 1-3 3h-2a3 3 0 0 1 0-6h1" />
-        </svg>
-      );
-    case "diamond":
-      return (
-        <svg {...common}>
-          <path d="M12 2 22 12 12 22 2 12z" />
-        </svg>
-      );
-    case "hex":
-      return (
-        <svg {...common}>
-          <path d="M12 2 21 7v10l-9 5-9-5V7z" />
-        </svg>
-      );
+function sourceTag(id: string): string {
+  switch (id) {
+    case "macmini-video":
+      return "mac·vid";
+    case "oracle-video":
+      return "oracle·vid";
+    case "macmini-ig":
+      return "mac·ig";
     default:
-      return null;
+      return id;
   }
+}
+
+function fmtClock(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "--:--:--";
+  return d.toLocaleTimeString([], { hour12: false });
+}
+
+function fmtDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function fmtBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }

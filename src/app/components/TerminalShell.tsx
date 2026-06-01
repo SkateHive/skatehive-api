@@ -1,13 +1,5 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
-
-type Tab = "docs" | "leaderboard" | "status";
-
-const TABS: { id: Tab; href: string; label: string }[] = [
-  { id: "docs", href: "/", label: "~/docs" },
-  { id: "leaderboard", href: "/leaderboard", label: "~/leaderboard" },
-  { id: "status", href: "/status", label: "~/status" },
-];
+import Nav, { type Tab } from "./Nav";
 
 /**
  * Shared terminal-window chrome used across the rendered pages.
@@ -29,6 +21,8 @@ export default function TerminalShell({
   return (
     <div className="t-wrapper">
       <div className="t-shell">
+        <Nav active={active} />
+
         <div className="t-window">
           <div className="t-titlebar">
             <span className="t-dots">
@@ -41,18 +35,6 @@ export default function TerminalShell({
           </div>
 
           <div className="t-terminal">
-            <nav className="t-nav">
-              {TABS.map((tab) => (
-                <Link
-                  key={tab.id}
-                  href={tab.href}
-                  className={`t-tab ${tab.id === active ? "is-active" : ""}`}
-                >
-                  {tab.label}
-                </Link>
-              ))}
-            </nav>
-
             <p className="t-prompt">
               <span className="t-user">root@skatehive</span>
               <span className="t-path">:~/services</span>
