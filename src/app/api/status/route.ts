@@ -38,13 +38,6 @@ const CACHE_TTL_MS = 300000;
 
 const SERVICE_DEFINITIONS: ServiceDefinition[] = [
   {
-    id: 'skate-insta',
-    name: 'Skate-Insta',
-    category: 'Instagram Downloader',
-    description: 'Media/share app used for IG pulls',
-    healthUrl: 'https://skate-insta.onrender.com/healthz',
-  },
-  {
     id: 'macmini-insta',
     name: 'Mac Mini IG',
     category: 'Instagram Downloader',
