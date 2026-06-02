@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd job that runs the Skatehive leaderboard recompute on a schedule.
+
+  SETUP:
+    1. Replace __REPO_DIR__ below with the absolute path to this repo on the Mac Mini
+       (e.g. /Users/vladnikolaev/Code/skatehive/monorepo/services/skatehive-api).
+    2. Copy to ~/Library/LaunchAgents/app.skatehive.leaderboard-recompute.plist
+    3. launchctl load -w ~/Library/LaunchAgents/app.skatehive.leaderboard-recompute.plist
+
+  StartInterval is in seconds (1200 = every 20 minutes). Each run processes the
+  50 stalest accounts, so tune the interval to how fast the community grows.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>app.skatehive.leaderboard-recompute</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO_DIR__/scripts/run-recompute.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO_DIR__</string>
+
+    <key>StartInterval</key>
+    <integer>1200</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>__REPO_DIR__/logs/recompute.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__REPO_DIR__/logs/recompute.log</string>
+</dict>
+</plist>
