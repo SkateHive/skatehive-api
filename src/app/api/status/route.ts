@@ -226,7 +226,15 @@ async function checkHealth(service: ServiceDefinition): Promise<ServiceHealth> {
       };
     }
 
-    const data = await response.json().catch(() => ({}));
+    const responseText = await response.text().catch(() => '');
+    const data = (() => {
+      try {
+        return responseText ? JSON.parse(responseText) : {};
+      } catch {
+        return {};
+      }
+    })();
+    const textOkFlag = responseText.trim().toLowerCase() === 'ok';
 
     // Special handling for Instagram services to extract cookie information
     if (service.category === 'Instagram Downloader' && data.authentication) {
@@ -238,10 +246,11 @@ async function checkHealth(service: ServiceDefinition): Promise<ServiceHealth> {
         daysUntilExpiry: auth.days_until_expiry,
       };
 
-      const okFlag = data.ok === true || data.healthy === true || data.status === 'ok';
+      const okFlag = data.ok === true || data.healthy === true || data.status === 'ok' || textOkFlag;
+      const isHealthy = okFlag || response.ok;
       return {
         ...service,
-        isHealthy: okFlag || response.ok,
+        isHealthy,
         responseTime,
         lastChecked: new Date().toISOString(),
         cookieInfo,
@@ -249,17 +258,18 @@ async function checkHealth(service: ServiceDefinition): Promise<ServiceHealth> {
           ? `Invalid Instagram cookies${cookieInfo.daysUntilExpiry !== undefined ? ` (expires in ${cookieInfo.daysUntilExpiry} days)` : ''}`
           : !cookieInfo.exists
             ? 'Instagram cookies missing'
-            : okFlag ? undefined : 'Health endpoint did not report ok',
+            : isHealthy ? undefined : 'Health endpoint did not report ok',
       };
     }
 
-    const okFlag = data.ok === true || data.healthy === true || data.status === 'ok';
+    const okFlag = data.ok === true || data.healthy === true || data.status === 'ok' || textOkFlag;
+    const isHealthy = okFlag || response.ok;
     return {
       ...service,
-      isHealthy: okFlag || response.ok,
+      isHealthy,
       responseTime,
       lastChecked: new Date().toISOString(),
-      error: okFlag ? undefined : 'Health endpoint did not report ok',
+      error: isHealthy ? undefined : 'Health endpoint did not report ok',
     };
   } catch (error) {
     const responseTime = Date.now() - startTime;
