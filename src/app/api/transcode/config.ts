@@ -29,6 +29,11 @@ export interface ServiceConfig {
 export interface ServiceStatus extends ServiceConfig {
   isHealthy: boolean;
   responseTime?: number;
+  capacity?: {
+    active: number;
+    max: number;
+    available: number;
+  };
   error?: string;
   lastChecked: string;
 }

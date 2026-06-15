@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { TRANSCODE_SERVICES, ServiceStatus } from '../config';
 
-async function checkServiceHealth(healthUrl: string): Promise<{ isHealthy: boolean; responseTime?: number; error?: string }> {
+async function checkServiceHealth(healthUrl: string): Promise<{
+  isHealthy: boolean;
+  responseTime?: number;
+  capacity?: ServiceStatus['capacity'];
+  error?: string;
+}> {
   const startTime = Date.now();
   
   try {
@@ -26,12 +31,22 @@ async function checkServiceHealth(healthUrl: string): Promise<{ isHealthy: boole
     }
     
     const data = await response.json();
-    const isHealthy = data.ok === true || data.healthy === true || data.status === 'ok';
+    const rawHealthy = data.ok === true || data.healthy === true || data.status === 'ok';
+    const capacity = data.capacity && typeof data.capacity === 'object'
+      ? {
+          active: Number(data.capacity.active ?? 0),
+          max: Number(data.capacity.max ?? 1),
+          available: Number(data.capacity.available ?? 1)
+        }
+      : undefined;
+    const hasCapacity = !capacity || capacity.available > 0;
+    const isHealthy = rawHealthy && hasCapacity;
     
     return {
       isHealthy,
       responseTime,
-      error: isHealthy ? undefined : 'Health check returned false'
+      capacity,
+      error: isHealthy ? undefined : (rawHealthy && !hasCapacity ? 'Worker at capacity' : 'Health check returned false')
     };
   } catch (error) {
     const responseTime = Date.now() - startTime;
@@ -61,6 +76,7 @@ export async function GET(request: NextRequest) {
           transcodeUrl: service.transcodeUrl,
           isHealthy: healthResult.isHealthy,
           responseTime: healthResult.responseTime,
+          capacity: healthResult.capacity,
           error: healthResult.error,
           lastChecked: new Date().toISOString()
         };
@@ -89,7 +105,8 @@ export async function GET(request: NextRequest) {
           name: activeService.name,
           priority: activeService.priority,
           transcodeUrl: activeService.transcodeUrl,
-          responseTime: `${activeService.responseTime}ms`
+          responseTime: `${activeService.responseTime}ms`,
+          capacity: activeService.capacity
         } : null
       },
       services: serviceStatuses.sort((a, b) => a.priority - b.priority)

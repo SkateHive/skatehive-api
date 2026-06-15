@@ -24,7 +24,9 @@ async function checkServiceHealth(healthUrl: string): Promise<boolean> {
     
     const data = await response.json();
     // Check if the response indicates the service is healthy
-    return data.ok === true || data.healthy === true || data.status === 'ok';
+    const isHealthy = data.ok === true || data.healthy === true || data.status === 'ok';
+    const hasCapacity = !data.capacity || Number(data.capacity.available ?? 1) > 0;
+    return isHealthy && hasCapacity;
   } catch (error) {
     console.error(`Health check failed for ${healthUrl}:`, error);
     return false;
@@ -35,7 +37,7 @@ async function getHealthyService(): Promise<string | null> {
   const now = Date.now();
   
   // Sort services by priority (1 = highest priority)
-  const sortedServices = TRANSCODE_SERVICES.sort((a, b) => a.priority - b.priority);
+  const sortedServices = [...TRANSCODE_SERVICES].sort((a, b) => a.priority - b.priority);
   
   for (const service of sortedServices) {
     const cacheKey = service.healthUrl;
