@@ -1,5 +1,5 @@
 import { Asset } from '@hiveio/dhive';
-import { supabase } from '../../../utils/supabase/supabaseClient';
+import { supabase, supabaseLeaderboardAdmin } from '../../../utils/supabase/supabaseClient';
 import { logWithColor, fetchAccountInfo, extractEthAddressFromHiveAccount } from '../../../utils/hive/hiveUtils';
 import { fetchDelegatedCurator } from '../../../utils/hive/hiveUtil_hafsql';
 import { DataBaseAuthor } from '../../../utils/types';
@@ -11,6 +11,8 @@ import { matchAndUpsertDonors } from '../../../utils/ethereum/giveth';
 import { fetchCommunityPosts } from '@/app/utils/hive/fetchCommunityPosts';
 import { fetchCommunitySnaps } from '@/app/utils/hive/fetchCommunitySnaps';
 
+const leaderboardTable = process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard';
+const leaderboardWriteClient = supabaseLeaderboardAdmin ?? supabase;
 
 // Helper function to fetch posts and snaps scores from APIs
 async function fetchPostsAndSnapsScore(
@@ -67,7 +69,7 @@ export const removeUnsubscribedAuthors = async (currentSubscribers: { hive_autho
   const currentUsernames = currentSubscribers.map(s => s.hive_author.toLowerCase());
 
   const { data: allAuthors, error } = await supabase
-    .from(process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard')
+    .from(leaderboardTable)
     .select('hive_author');
 
   if (error) {
@@ -83,8 +85,13 @@ export const removeUnsubscribedAuthors = async (currentSubscribers: { hive_autho
     .map(author => author.hive_author);
 
   if (toRemove.length > 0) {
-    const { error: deleteError } = await supabase
-      .from(process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard')
+    if (!leaderboardWriteClient) {
+      logWithColor('Supabase write client not initialized', 'red');
+      return;
+    }
+
+    const { error: deleteError } = await leaderboardWriteClient
+      .from(leaderboardTable)
       .delete()
       .in('hive_author', toRemove);
 
@@ -100,8 +107,8 @@ export const removeUnsubscribedAuthors = async (currentSubscribers: { hive_autho
 
 // Helper function to upsert authors into Supabase
 export const upsertAuthors = async (authors: { hive_author: string }[]) => {
-  if (!supabase) {
-    logWithColor('Supabase client not initialized', 'red');
+  if (!leaderboardWriteClient) {
+    logWithColor('Supabase write client not initialized', 'red');
     return;
   }
 
@@ -110,8 +117,8 @@ export const upsertAuthors = async (authors: { hive_author: string }[]) => {
       hive_author,
     }));
 
-    const { error } = await supabase
-      .from(process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard')
+    const { error } = await leaderboardWriteClient
+      .from(leaderboardTable)
       .upsert(authorData, { onConflict: 'hive_author' });
 
     if (error) {
@@ -127,15 +134,15 @@ export const upsertAuthors = async (authors: { hive_author: string }[]) => {
 
 // Helper function to upsert account data into the leaderboard
 export const upsertAccountData = async (accounts: Partial<DataBaseAuthor>[]) => {
-  if (!supabase) {
-    logWithColor('Supabase client not initialized', 'red');
+  if (!leaderboardWriteClient) {
+    logWithColor('Supabase write client not initialized', 'red');
     return;
   }
 
   try {
     for (const account of accounts) {
-      const { error: upsertError } = await supabase
-        .from(process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard')
+      const { error: upsertError } = await leaderboardWriteClient
+        .from(leaderboardTable)
         .upsert(account, { onConflict: 'hive_author' });
 
       if (upsertError) {
@@ -276,8 +283,8 @@ export const fetchAndUpsertAccountData = async (subscriber: { hive_author: strin
 
 // export const calculateAndUpsertPoints = async () => {
 export const calculateAndUpsertPointsBatch = async (batchUsers: any[]) => {
-  if (!supabase) {
-    logWithColor('Supabase client not initialized', 'red');
+  if (!leaderboardWriteClient) {
+    logWithColor('Supabase write client not initialized', 'red');
     return 0;
   }
 
@@ -475,8 +482,8 @@ export const calculateAndUpsertPointsBatch = async (batchUsers: any[]) => {
     logWithColor(`leaderboardData users = ${leaderboardData.length}`, 'red')
     logWithColor(`users to update = ${usersToUpdate.length}`, 'red')
 
-    const { error } = await supabase
-      .from(process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard')
+    const { error } = await leaderboardWriteClient
+      .from(leaderboardTable)
       .upsert(
         usersToUpdate.map(({ hive_author, points, posts_score }) => ({
           hive_author,
@@ -501,8 +508,8 @@ export const calculateAndUpsertPointsBatch = async (batchUsers: any[]) => {
 
 // Function to calculate and update points for all users
 export const calculateAndUpsertPoints = async () => {
-  if (!supabase) {
-    logWithColor('Supabase client not initialized', 'red');
+  if (!leaderboardWriteClient) {
+    logWithColor('Supabase write client not initialized', 'red');
     return;
   }
 
@@ -614,8 +621,8 @@ export const calculateAndUpsertPoints = async () => {
       return;
     }
 
-    const { error } = await supabase
-      .from(process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard')
+    const { error } = await leaderboardWriteClient
+      .from(leaderboardTable)
       .upsert(
         usersToUpdate.map(({ hive_author, points, post_count }) => ({
           hive_author,
@@ -634,5 +641,4 @@ export const calculateAndUpsertPoints = async () => {
     logWithColor(`Error in calculateAndUpsertPoints: ${(error as Error).message}`, 'red');
   }
 };
-
 
