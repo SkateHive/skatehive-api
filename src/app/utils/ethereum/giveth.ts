@@ -1,8 +1,10 @@
 import { gql, request } from 'graphql-request';
-import { supabase } from '../supabase/supabaseClient';
+import { supabase, supabaseLeaderboardAdmin } from '../supabase/supabaseClient';
 import { logWithColor } from '../hive/hiveUtils';
 
 const GIVETH_API_URL = 'https://mainnet.serve.giveth.io/graphql';
+const leaderboardTable = process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard';
+const leaderboardWriteClient = supabaseLeaderboardAdmin ?? supabase;
 
 const GET_ALL_DONATIONS_BY_PROJECT = gql`
   query GetAllDonationsByProject {
@@ -56,7 +58,7 @@ export const fetchAllHiveAuthors = async () => {
   }
 
   const { data, error } = await supabase
-    .from(process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard')
+    .from(leaderboardTable)
     .select('hive_author, eth_address, giveth_donations_usd, giveth_donations_amount');
 
   if (error) {
@@ -69,9 +71,9 @@ export const fetchAllHiveAuthors = async () => {
 
 /** ✅ Match Giveth donors to existing users or create new ones */
 export const matchAndUpsertDonors = async () => {
-  if (!supabase) {
-    logWithColor('Supabase client not initialized', 'red');
-    throw new Error('Supabase client not initialized');
+  if (!leaderboardWriteClient) {
+    logWithColor('Supabase write client not initialized', 'red');
+    throw new Error('Supabase write client not initialized');
   }
 
   try {
@@ -129,7 +131,7 @@ export const matchAndUpsertDonors = async () => {
 
     // ✅ Bulk upsert aggregated data
     if (upsertData.length > 0) {
-      const { error } = await supabase.from(process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard')
+      const { error } = await leaderboardWriteClient.from(leaderboardTable)
                                       .upsert(upsertData, { 
                                         onConflict: 'hive_author' 
                                       });

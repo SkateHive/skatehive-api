@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL_STAGE;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY_STAGE;
+const leaderboardServiceRoleKey = process.env.SUPABASE_LEADERBOARD_SERVICE_ROLE_KEY;
 // Userbase DB (skatehive3.0 Supabase project — separate from the leaderboard DB)
 const userbaseUrl = process.env.SUPABASE_USERBASE_URL || process.env.SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -12,6 +13,12 @@ const isValidUrl = (url?: string) => url && (url.startsWith('http://') || url.st
 
 export const supabase = (supabaseUrl && isValidUrl(supabaseUrl) && supabaseAnonKey)
   ? createClient(supabaseUrl, supabaseAnonKey)
+  : null;
+
+export const supabaseLeaderboardAdmin = (supabaseUrl && isValidUrl(supabaseUrl) && leaderboardServiceRoleKey)
+  ? createClient(supabaseUrl, leaderboardServiceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
   : null;
 
 // Service role client for server-side queries against RLS-protected userbase tables
