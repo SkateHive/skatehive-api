@@ -30,6 +30,15 @@ export const updateLeaderboardData = async () => {
         console.warn(`${community} community has ${subscribers.length} subscribers.`);
         console.timeEnd("fetchSubscribers");
 
+        // Abort the recompute if the subscriber fetch came back empty. This is
+        // almost always a transient HAFSQL failure (returns 0 rows without
+        // throwing), and continuing would let removeUnsubscribedAuthors() delete
+        // every author and wipe the leaderboard. Bail out and keep existing data.
+        if (!subscribers || subscribers.length === 0) {
+            logWithColor('Aborting recompute: fetchSubscribers returned 0 subscribers (likely a transient upstream failure). Leaderboard left untouched.', 'red');
+            return;
+        }
+
         console.time("getLeaderboard");
         var leaderboardData = await getLeaderboard();
         console.warn(`Leaderboard has ${leaderboardData.length} records.`);

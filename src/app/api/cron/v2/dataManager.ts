@@ -66,6 +66,15 @@ export const removeUnsubscribedAuthors = async (currentSubscribers: { hive_autho
     return;
   }
 
+  // Safety guard: an empty subscriber list almost always means the upstream
+  // fetch (HAFSQL community_subs) transiently returned zero rows, NOT that the
+  // community actually lost every member. Proceeding would delete every author
+  // and wipe the leaderboard. Refuse to remove anything in that case.
+  if (!currentSubscribers || currentSubscribers.length === 0) {
+    logWithColor('Refusing to remove authors: subscriber list is empty (likely a transient upstream failure).', 'red');
+    return;
+  }
+
   const currentUsernames = currentSubscribers.map(s => s.hive_author.toLowerCase());
 
   const { data: allAuthors, error } = await supabase
