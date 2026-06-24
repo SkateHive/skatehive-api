@@ -1,4 +1,5 @@
 import { HiveClient } from "@/app/utils/hive/hiveUtils";
+import { supabaseAdmin } from "@/app/utils/supabase/supabaseClient";
 
 // Ported from the web app's lib/utils/hiveAccountUtils.ts so mobile signups
 // pick a Hive-valid, on-chain-available username (claimable later via sponsorship).
@@ -32,4 +33,22 @@ export async function checkHiveAccountExists(username: string): Promise<boolean>
   if (!/^[a-z][a-z0-9.-]*[a-z0-9]$/.test(u)) return false;
   const accounts = await HiveClient.database.getAccounts([u]);
   return accounts.length > 0;
+}
+
+/**
+ * True if the handle is already reserved by another userbase account in our DB.
+ * Mirrors the web app's /auth/lookup, which checks DB uniqueness AND on-chain
+ * existence so the picker can't show "available" for a name that signup will
+ * then reject. Throws on a DB error so callers can fail safe (treat as taken).
+ */
+export async function isHandleReservedInUserbase(handle: string): Promise<boolean> {
+  if (!supabaseAdmin) return false;
+  const u = (handle || "").trim().toLowerCase();
+  const { data, error } = await supabaseAdmin
+    .from("userbase_users")
+    .select("id")
+    .eq("handle", u)
+    .limit(1);
+  if (error) throw error;
+  return Boolean(data?.[0]);
 }

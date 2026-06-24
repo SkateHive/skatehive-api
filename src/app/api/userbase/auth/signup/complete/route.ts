@@ -96,6 +96,14 @@ export async function POST(req: NextRequest) {
     .select("id")
     .single();
   if (userErr || !created) {
+    // Unique-violation: another signup claimed this handle between our check
+    // above and this insert (TOCTOU). The DB constraint is the source of truth.
+    if ((userErr as { code?: string } | null)?.code === "23505") {
+      return NextResponse.json(
+        { success: false, error: "That username is already in use" },
+        { status: 409 }
+      );
+    }
     console.error("[signup/complete] user insert failed", userErr);
     return NextResponse.json(
       { success: false, error: "Could not create the account" },
