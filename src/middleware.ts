@@ -19,15 +19,25 @@ export async function middleware(request: NextRequest) {
     (endpoint) => pathname === endpoint || pathname.startsWith(endpoint + '/')
   );
 
+  let response: NextResponse;
   if (pathname.startsWith('/api/v1/') && !isPublicEndpoint) {
     const isAuthenticated = await authenticateToken(request);
-    if (!isAuthenticated) {
-      console.log('❌ Unauthorized access for:', pathname);
-      return new NextResponse(null, { status: 401, statusText: 'Unauthorized' });
-    }
+    response = isAuthenticated
+      ? NextResponse.next()
+      : new NextResponse(null, { status: 401, statusText: 'Unauthorized' });
+  } else {
+    response = NextResponse.next();
   }
-  console.log('✅ Authorized access for:', pathname);
-  return NextResponse.next();
+
+  // v1 is deprecated in favour of /api/v2 (full parity). The matcher restricts
+  // this middleware to /api/v1/*, so every request here is a v1 hit: signal
+  // deprecation (RFC 8594) and log usage so we can confirm there's no external
+  // traffic before deleting the v1 routes. See API_ARCHITECTURE.md.
+  response.headers.set('Deprecation', 'true');
+  response.headers.set('Sunset', 'Sat, 01 Aug 2026 00:00:00 GMT');
+  response.headers.set('Link', '</api/v2>; rel="successor-version"');
+  console.warn('[v1-deprecated]', request.method, pathname);
+  return response;
 }
 
 
