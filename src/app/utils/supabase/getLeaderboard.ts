@@ -1,55 +1,46 @@
-import { supabase } from './supabaseClient'; // Use the existing Supabase client
+// The `leaderboard` table is RLS-protected, so reads must go through the
+// service-role client (the anon `supabase` client silently returns an error
+// → empty list → a blank leaderboard on web + mobile). Use the dedicated
+// leaderboard admin client and surface errors instead of swallowing them.
+import { supabaseLeaderboardAdmin } from './supabaseClient';
 
 export const getLeaderboard = async () => {
-    if (!supabase) {
-        console.error('Supabase client not initialized');
-        throw new Error('Supabase client not initialized');
+    const client = supabaseLeaderboardAdmin;
+    if (!client) {
+        console.error(
+            'Leaderboard Supabase client not initialized — check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_LEADERBOARD_SERVICE_ROLE_KEY'
+        );
+        throw new Error('Leaderboard Supabase client not initialized');
     }
 
-    // try {
-    //     const { data } = await supabase
-    //         .from(process.env.NEXT_PUBLIC_SUPABASE_DB || 'leaderboard')
-    //         .select('*')
-    //         .range(0, 2500);
-    //     if (data) {
-    //         return data;
-    //     } else {
-    //         return [];
-    //     }
-    // } catch {
-    //     throw new Error('Failed to fetch data from the database');
-    // }
-
     const pageSize = 1000;
-    let allData = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const allData: any[] = [];
     let from = 0;
     let to = pageSize - 1;
     let done = false;
-    try {
-        while (!done) {
-            const { data, error } = await supabase
-                .from('leaderboard')
-                .select('*')
-                .range(from, to);
 
-            if (error) {
-                console.error(`Error fetching leaderboard authors: ${error.message}`, 'red');
-                break;
-            }
+    while (!done) {
+        const { data, error } = await client
+            .from('leaderboard')
+            .select('*')
+            .range(from, to);
 
-            allData.push(...(data || []));
-
-            if ((data || []).length < pageSize) done = true;
-            else {
-                from += pageSize;
-                to += pageSize;
-            }
+        // Don't swallow the error — a blank leaderboard should be a loud 500,
+        // not a misleading empty success.
+        if (error) {
+            console.error(`Error fetching leaderboard: ${error.message}`);
+            throw new Error(`Failed to fetch leaderboard: ${error.message}`);
         }
 
-        return allData
-    } catch {
-        // console.error('Failed to fetch data from the database')
-        // return []
-        throw new Error('Failed to fetch data from the database');
+        allData.push(...(data || []));
+
+        if ((data || []).length < pageSize) done = true;
+        else {
+            from += pageSize;
+            to += pageSize;
+        }
     }
+
+    return allData;
 };
