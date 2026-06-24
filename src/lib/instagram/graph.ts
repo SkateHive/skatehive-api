@@ -1,38 +1,65 @@
 /**
  * Instagram Graph API client for the shared @skatehive Business account.
- * Ported from skatehive3.0/lib/instagram/graph.ts — pure fetch + env, no
- * framework deps. Two-phase publish: create media container -> poll status ->
- * media_publish. Photos finish in seconds; Reels can take up to ~3 minutes.
+ * Two-phase publish: create media container -> poll status -> media_publish.
+ *
+ * Supports an ORDERED LIST of credentials (host + token). The publish runs
+ * end-to-end with the first config; on an AUTH-class failure (bad/expired token,
+ * host/type mismatch) it retries the whole publish with the next config. Media
+ * errors (format/fetch/rate-limit) do NOT fall back — same result, wasted quota.
+ *
+ * Config (Business Account ID is shared; only host+token vary):
+ *   INSTAGRAM_BUSINESS_ACCOUNT_ID            (required)
+ *   INSTAGRAM_PAGE_ACCESS_TOKEN  + INSTAGRAM_GRAPH_HOST    (primary)
+ *   INSTAGRAM_PAGE_ACCESS_TOKEN_2 + INSTAGRAM_GRAPH_HOST_2 (optional fallback)
  */
 
-// Accept INSTAGRAM_GRAPH_HOST with or without a scheme (e.g. "graph.facebook.com"
-// or "https://graph.facebook.com") — new URL() requires a scheme, so normalize.
-const RAW_GRAPH_HOST = process.env.INSTAGRAM_GRAPH_HOST || "https://graph.instagram.com";
-const GRAPH_API_BASE = /^https?:\/\//i.test(RAW_GRAPH_HOST)
-  ? RAW_GRAPH_HOST
-  : `https://${RAW_GRAPH_HOST}`;
+interface IgConfig {
+  igUserId: string;
+  accessToken: string;
+  host: string;
+  version: string;
+}
 
-function getConfig() {
+// Normalize a host that may or may not include a scheme (new URL() needs one).
+function normHost(h?: string): string {
+  if (!h) return "https://graph.instagram.com";
+  return /^https?:\/\//i.test(h) ? h : `https://${h}`;
+}
+
+function getConfigs(): IgConfig[] {
   const igUserId = process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID;
-  const accessToken = process.env.INSTAGRAM_PAGE_ACCESS_TOKEN;
   const version = process.env.INSTAGRAM_GRAPH_API_VERSION || "v23.0";
-  if (!igUserId || !accessToken) {
-    return { ok: false as const, error: "Instagram cross-posting is not configured on the server." };
+  if (!igUserId) return [];
+  const configs: IgConfig[] = [];
+  const t1 = process.env.INSTAGRAM_PAGE_ACCESS_TOKEN;
+  if (t1) configs.push({ igUserId, accessToken: t1, host: normHost(process.env.INSTAGRAM_GRAPH_HOST), version });
+  const t2 = process.env.INSTAGRAM_PAGE_ACCESS_TOKEN_2;
+  if (t2) {
+    configs.push({
+      igUserId,
+      accessToken: t2,
+      host: normHost(process.env.INSTAGRAM_GRAPH_HOST_2 || process.env.INSTAGRAM_GRAPH_HOST),
+      version,
+    });
   }
-  return { ok: true as const, igUserId, accessToken, version };
+  return configs;
 }
 
 export type PublishResult =
   | { success: true; containerId: string; mediaId: string; permalink?: string }
-  | { success: false; error: string };
+  | { success: false; error: string; authError?: boolean };
+
+// Meta auth-class errors → worth retrying with a different credential.
+function isAuthError(error: string | undefined): boolean {
+  return /access token|oauth|cannot parse|session has expired|code 190\b/i.test(error || "");
+}
 
 async function graphFetch(
+  cfg: IgConfig,
   path: string,
   init: RequestInit & { searchParams?: Record<string, string> } = {}
 ): Promise<{ ok: boolean; status: number; data: any }> {
-  const cfg = getConfig();
-  if (!cfg.ok) return { ok: false, status: 500, data: { error: { message: cfg.error } } };
-  const url = new URL(`${GRAPH_API_BASE}/${cfg.version}${path}`);
+  const url = new URL(`${cfg.host}/${cfg.version}${path}`);
   if (init.searchParams) {
     for (const [k, v] of Object.entries(init.searchParams)) url.searchParams.set(k, v);
   }
@@ -51,7 +78,6 @@ function fbError(data: any, fallback: string): string {
   return data?.error?.message || data?.error_user_msg || fallback;
 }
 
-/** JSON-array string of bare IG usernames (Collab invites), max 3. Omitted when empty. */
 function collaboratorParam(collaborators?: string[]): { collaborators: string } | {} {
   const cleaned = (collaborators ?? [])
     .map((c) => c.trim().replace(/^@/, "").toLowerCase())
@@ -61,20 +87,21 @@ function collaboratorParam(collaborators?: string[]): { collaborators: string } 
   return { collaborators: JSON.stringify(cleaned) };
 }
 
-async function fetchPermalink(mediaId: string): Promise<string | undefined> {
-  const res = await graphFetch(`/${mediaId}`, { searchParams: { fields: "permalink" } });
+async function fetchPermalink(cfg: IgConfig, mediaId: string): Promise<string | undefined> {
+  const res = await graphFetch(cfg, `/${mediaId}`, { searchParams: { fields: "permalink" } });
   if (res.ok && typeof res.data?.permalink === "string") return res.data.permalink;
   return undefined;
 }
 
 async function waitForContainerReady(
+  cfg: IgConfig,
   containerId: string,
   timeoutMs: number,
   pollMs: number
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    const statusRes = await graphFetch(`/${containerId}`, {
+    const statusRes = await graphFetch(cfg, `/${containerId}`, {
       searchParams: { fields: "status_code,status" },
     });
     const code = statusRes.data?.status_code;
@@ -87,52 +114,39 @@ async function waitForContainerReady(
   return { ok: false, error: `IG container did not finish within ${timeoutMs}ms` };
 }
 
-export async function publishImageToInstagram(input: {
-  imageUrl: string;
-  caption: string;
-  collaborators?: string[];
-}): Promise<PublishResult> {
-  const cfg = getConfig();
-  if (!cfg.ok) return { success: false, error: cfg.error };
-
-  const containerRes = await graphFetch(`/${cfg.igUserId}/media`, {
+// Single-config attempts. `authError` lets the caller decide whether to fail over.
+async function publishImageWith(
+  cfg: IgConfig,
+  input: { imageUrl: string; caption: string; collaborators?: string[] }
+): Promise<PublishResult> {
+  const containerRes = await graphFetch(cfg, `/${cfg.igUserId}/media`, {
     method: "POST",
-    searchParams: {
-      image_url: input.imageUrl,
-      caption: input.caption,
-      ...collaboratorParam(input.collaborators),
-    },
+    searchParams: { image_url: input.imageUrl, caption: input.caption, ...collaboratorParam(input.collaborators) },
   });
   if (!containerRes.ok || !containerRes.data?.id) {
-    return { success: false, error: fbError(containerRes.data, "Failed to create IG media container.") };
+    const error = fbError(containerRes.data, "Failed to create IG media container.");
+    return { success: false, error, authError: isAuthError(error) };
   }
   const containerId: string = containerRes.data.id;
-
-  const ready = await waitForContainerReady(containerId, 30_000, 1500);
+  const ready = await waitForContainerReady(cfg, containerId, 30_000, 1500);
   if (!ready.ok) return { success: false, error: ready.error };
-
-  const publishRes = await graphFetch(`/${cfg.igUserId}/media_publish`, {
+  const publishRes = await graphFetch(cfg, `/${cfg.igUserId}/media_publish`, {
     method: "POST",
     searchParams: { creation_id: containerId },
   });
   if (!publishRes.ok || !publishRes.data?.id) {
-    return { success: false, error: fbError(publishRes.data, "Failed to publish IG media.") };
+    const error = fbError(publishRes.data, "Failed to publish IG media.");
+    return { success: false, error, authError: isAuthError(error) };
   }
   const mediaId: string = publishRes.data.id;
-  const permalink = await fetchPermalink(mediaId);
-  return { success: true, containerId, mediaId, permalink };
+  return { success: true, containerId, mediaId, permalink: await fetchPermalink(cfg, mediaId) };
 }
 
-export async function publishReelToInstagram(input: {
-  videoUrl: string;
-  caption: string;
-  coverUrl?: string;
-  collaborators?: string[];
-}): Promise<PublishResult> {
-  const cfg = getConfig();
-  if (!cfg.ok) return { success: false, error: cfg.error };
-
-  const containerRes = await graphFetch(`/${cfg.igUserId}/media`, {
+async function publishReelWith(
+  cfg: IgConfig,
+  input: { videoUrl: string; caption: string; coverUrl?: string; collaborators?: string[] }
+): Promise<PublishResult> {
+  const containerRes = await graphFetch(cfg, `/${cfg.igUserId}/media`, {
     method: "POST",
     searchParams: {
       media_type: "REELS",
@@ -143,25 +157,59 @@ export async function publishReelToInstagram(input: {
     },
   });
   if (!containerRes.ok || !containerRes.data?.id) {
-    return { success: false, error: fbError(containerRes.data, "Failed to create IG Reel container.") };
+    const error = fbError(containerRes.data, "Failed to create IG Reel container.");
+    return { success: false, error, authError: isAuthError(error) };
   }
   const containerId: string = containerRes.data.id;
-
-  const ready = await waitForContainerReady(containerId, 180_000, 4000);
+  const ready = await waitForContainerReady(cfg, containerId, 180_000, 4000);
   if (!ready.ok) return { success: false, error: ready.error };
-
-  const publishRes = await graphFetch(`/${cfg.igUserId}/media_publish`, {
+  const publishRes = await graphFetch(cfg, `/${cfg.igUserId}/media_publish`, {
     method: "POST",
     searchParams: { creation_id: containerId },
   });
   if (!publishRes.ok || !publishRes.data?.id) {
-    return { success: false, error: fbError(publishRes.data, "Failed to publish IG Reel.") };
+    const error = fbError(publishRes.data, "Failed to publish IG Reel.");
+    return { success: false, error, authError: isAuthError(error) };
   }
   const mediaId: string = publishRes.data.id;
-  const permalink = await fetchPermalink(mediaId);
-  return { success: true, containerId, mediaId, permalink };
+  return { success: true, containerId, mediaId, permalink: await fetchPermalink(cfg, mediaId) };
+}
+
+// Run a publish across configs, failing over only on auth-class errors.
+async function withFailover(
+  attempt: (cfg: IgConfig) => Promise<PublishResult>
+): Promise<PublishResult> {
+  const configs = getConfigs();
+  if (!configs.length) {
+    return { success: false, error: "Instagram cross-posting is not configured on the server." };
+  }
+  let last: PublishResult = { success: false, error: "No Instagram credentials" };
+  for (let i = 0; i < configs.length; i++) {
+    last = await attempt(configs[i]);
+    if (last.success) return last;
+    // Only try the next credential on an auth-class failure.
+    if (!last.authError || i === configs.length - 1) return last;
+  }
+  return last;
+}
+
+export function publishImageToInstagram(input: {
+  imageUrl: string;
+  caption: string;
+  collaborators?: string[];
+}): Promise<PublishResult> {
+  return withFailover((cfg) => publishImageWith(cfg, input));
+}
+
+export function publishReelToInstagram(input: {
+  videoUrl: string;
+  caption: string;
+  coverUrl?: string;
+  collaborators?: string[];
+}): Promise<PublishResult> {
+  return withFailover((cfg) => publishReelWith(cfg, input));
 }
 
 export function isInstagramConfigured(): boolean {
-  return getConfig().ok;
+  return getConfigs().length > 0;
 }
