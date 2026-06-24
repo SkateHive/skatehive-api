@@ -6,13 +6,15 @@ import {
   verifyHiveSignature,
   getOrCreateHiveUserId,
 } from "@/lib/instagram/signatureAuth";
+import { resolveUserbaseUserId, getPrimaryHiveHandle } from "@/lib/userbase/session";
 
 export const runtime = "nodejs";
 
-// Manage a user's Instagram handle (userbase_identities type='instagram') for
-// the mobile cross-post flow. Auth: per-request posting-key signature over
-// buildIgHandleAuthMessage. Returns { handle, source } so the composer's
-// first-time prompt fires when source === null.
+// Manage a user's Instagram handle (userbase_identities type='instagram').
+// Auth: signature over buildIgHandleAuthMessage (mobile key accounts) OR a
+// userbase session — Bearer token (mobile email accounts) / userbase_refresh
+// cookie (web). Returns { handle, source } so the first-time prompt fires when
+// source === null.
 
 interface SigParams {
   hiveAuthor: string;
@@ -21,24 +23,32 @@ interface SigParams {
   issuedAt: string;
 }
 
-async function authParams(params: SigParams): Promise<
-  { ok: true; userId: string } | { ok: false; status: number; error: string }
+async function authUser(
+  req: NextRequest,
+  params: SigParams
+): Promise<
+  | { ok: true; userId: string; hiveAuthor: string | null }
+  | { ok: false; status: number; error: string }
 > {
-  const { hiveAuthor, hivePublicKey, hiveSignature, issuedAt } = params;
-  if (!hiveAuthor || !hivePublicKey || !hiveSignature || !issuedAt) {
-    return { ok: false, status: 400, error: "Missing signature fields." };
+  // Signature path (key accounts).
+  if (params.hiveAuthor && params.hivePublicKey && params.hiveSignature && params.issuedAt) {
+    const verified = await verifyHiveSignature({
+      message: buildIgHandleAuthMessage({ hiveAuthor: params.hiveAuthor, issuedAt: params.issuedAt }),
+      hiveAuthor: params.hiveAuthor,
+      hivePublicKey: params.hivePublicKey,
+      hiveSignature: params.hiveSignature,
+      issuedAt: params.issuedAt,
+    });
+    if (!verified.ok) return verified;
+    const userId = await getOrCreateHiveUserId(params.hiveAuthor);
+    if (!userId) return { ok: false, status: 500, error: "Could not resolve user." };
+    return { ok: true, userId, hiveAuthor: params.hiveAuthor };
   }
-  const verified = await verifyHiveSignature({
-    message: buildIgHandleAuthMessage({ hiveAuthor, issuedAt }),
-    hiveAuthor,
-    hivePublicKey,
-    hiveSignature,
-    issuedAt,
-  });
-  if (!verified.ok) return verified;
-  const userId = await getOrCreateHiveUserId(hiveAuthor);
-  if (!userId) return { ok: false, status: 500, error: "Could not resolve user." };
-  return { ok: true, userId };
+  // Session path (email Bearer / web cookie).
+  const userId = await resolveUserbaseUserId(req);
+  if (!userId) return { ok: false, status: 401, error: "Unauthorized" };
+  const hiveAuthor = await getPrimaryHiveHandle(userId);
+  return { ok: true, userId, hiveAuthor };
 }
 
 function fromQuery(req: NextRequest): SigParams {
@@ -62,8 +72,7 @@ function fromBody(body: any): SigParams {
 
 export async function GET(req: NextRequest) {
   if (!supabaseAdmin) return NextResponse.json({ error: "Missing config" }, { status: 500 });
-  const params = fromQuery(req);
-  const auth = await authParams(params);
+  const auth = await authUser(req, fromQuery(req));
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
   const { data } = await supabaseAdmin
@@ -76,18 +85,20 @@ export async function GET(req: NextRequest) {
   if (dbHandle) return NextResponse.json({ handle: dbHandle, source: "db" });
 
   // Fall back to the Hive profile so an existing on-chain handle isn't re-prompted.
-  const resolved = await resolveIgHandleForCaption({
-    hiveAuthor: params.hiveAuthor,
-    userId: auth.userId,
-    supabase: supabaseAdmin,
-  });
+  const resolved = auth.hiveAuthor
+    ? await resolveIgHandleForCaption({
+        hiveAuthor: auth.hiveAuthor,
+        userId: auth.userId,
+        supabase: supabaseAdmin,
+      })
+    : null;
   return NextResponse.json({ handle: resolved, source: resolved ? "hive" : null });
 }
 
 export async function POST(req: NextRequest) {
   if (!supabaseAdmin) return NextResponse.json({ error: "Missing config" }, { status: 500 });
   const body = await req.json().catch(() => null);
-  const auth = await authParams(fromBody(body));
+  const auth = await authUser(req, fromBody(body));
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
   const handle = sanitize(typeof body?.handle === "string" ? body.handle : "");
@@ -139,7 +150,7 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   if (!supabaseAdmin) return NextResponse.json({ error: "Missing config" }, { status: 500 });
   const body = await req.json().catch(() => null);
-  const auth = await authParams(fromBody(body));
+  const auth = await authUser(req, fromBody(body));
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
   await supabaseAdmin
     .from("userbase_identities")
