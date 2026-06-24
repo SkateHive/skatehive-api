@@ -25,6 +25,27 @@ function isCollaboratorVisibilityError(error: string | undefined) {
   return /user not visible|collaborator|invite/i.test(error || "");
 }
 
+/**
+ * Verify Meta will actually be able to fetch the media before we ask it to.
+ * IPFS gateways sometimes serve a not-yet-/never-pinned CID as a non-media 4xx,
+ * which Meta surfaces as the opaque "Media could not be fetched" (2207077).
+ * HEAD-probe the URL (a few times, to ride out genuine propagation lag) and
+ * require a 2xx image/* or video/* response. Returns true if reachable.
+ */
+async function mediaIsFetchable(url: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const res = await fetch(url, { method: "HEAD", redirect: "follow" });
+      const type = (res.headers.get("content-type") || "").toLowerCase();
+      if (res.ok && (type.startsWith("video/") || type.startsWith("image/"))) return true;
+    } catch {
+      // network hiccup — fall through to retry
+    }
+    if (attempt < 3) await new Promise((r) => setTimeout(r, 4000));
+  }
+  return false;
+}
+
 // Cross-post a Hive snap to the shared @skatehive Instagram account.
 // Auth: per-request posting-key signature (no session). The signature proves
 // the caller owns `hive_author`; we then HP-gate, dedupe, and publish.
@@ -236,7 +257,17 @@ export async function POST(req: NextRequest) {
     queuedId = queued.id as string;
   }
 
-  // 9. Publish (retry once without collaborators on a visibility error).
+  // 9. Pre-flight: make sure Meta can actually fetch the media (IPFS CIDs that
+  // never pinned would otherwise come back as the opaque 2207077). Marked
+  // retryable so the user can try again once the upload finishes pinning.
+  if (!(await mediaIsFetchable(videoUrl || imageUrl))) {
+    const error =
+      "Media isn't reachable on the IPFS gateway yet — it may still be uploading/pinning. Try cross-posting again in a moment.";
+    await supabaseAdmin.from("userbase_instagram_posts").update({ status: "failed", error }).eq("id", queuedId);
+    return NextResponse.json({ error }, { status: 503 });
+  }
+
+  // 10. Publish (retry once without collaborators on a visibility error).
   let publishResult = videoUrl
     ? await publishReelToInstagram({ videoUrl, caption, coverUrl: imageUrl || undefined, collaborators })
     : await publishImageToInstagram({ imageUrl, caption, collaborators });
