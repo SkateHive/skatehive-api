@@ -1,12 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getBearerUserId } from "@/lib/userbase/session";
 import { resolveSigner, broadcastAccountUpdate } from "@/lib/userbase/posting";
+import { HiveClient } from "@/app/utils/hive/hiveUtils";
 
 export const runtime = "nodejs";
 
 // Update profile (posting_json_metadata) on behalf of a userbase user. The
 // server signs account_update2 with their stored key. Refused for lite accounts
 // since editing the shared @skateuser profile would be catastrophic.
+//
+// The incoming `profile` is treated as a PATCH: we merge it over the account's
+// current on-chain profile (read here, keyed by the resolved signer — the only
+// place that authoritatively knows which Hive account we sign as). This keeps
+// unedited fields intact even when the client's merge-base was wrong/empty
+// (e.g. a userbase handle that differs from the on-chain account).
 export async function POST(req: NextRequest) {
   const userId = await getBearerUserId(req);
   if (!userId) {
@@ -40,7 +47,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const postingJsonMetadata = JSON.stringify({ profile });
+  // Merge the incoming fields over the account's current on-chain profile so
+  // fields the client didn't send (e.g. cover_image) aren't wiped.
+  let existingMeta: Record<string, unknown> = {};
+  try {
+    const [acct] = await HiveClient.database.getAccounts([signer.author]);
+    existingMeta = JSON.parse(acct?.posting_json_metadata || "{}");
+  } catch {
+    existingMeta = {};
+  }
+  const existingProfile =
+    (existingMeta.profile && typeof existingMeta.profile === "object"
+      ? (existingMeta.profile as Record<string, unknown>)
+      : {});
+  const mergedMeta = {
+    ...existingMeta,
+    profile: { ...existingProfile, ...(profile as Record<string, unknown>) },
+  };
+  const postingJsonMetadata = JSON.stringify(mergedMeta);
 
   try {
     await broadcastAccountUpdate(signer, postingJsonMetadata);
