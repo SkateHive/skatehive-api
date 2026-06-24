@@ -5,7 +5,12 @@
  * media_publish. Photos finish in seconds; Reels can take up to ~3 minutes.
  */
 
-const GRAPH_API_BASE = process.env.INSTAGRAM_GRAPH_HOST || "https://graph.instagram.com";
+// Accept INSTAGRAM_GRAPH_HOST with or without a scheme (e.g. "graph.facebook.com"
+// or "https://graph.facebook.com") — new URL() requires a scheme, so normalize.
+const RAW_GRAPH_HOST = process.env.INSTAGRAM_GRAPH_HOST || "https://graph.instagram.com";
+const GRAPH_API_BASE = /^https?:\/\//i.test(RAW_GRAPH_HOST)
+  ? RAW_GRAPH_HOST
+  : `https://${RAW_GRAPH_HOST}`;
 
 function getConfig() {
   const igUserId = process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID;
