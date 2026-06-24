@@ -14,7 +14,6 @@ export const getLeaderboard = async () => {
     }
 
     const pageSize = 1000;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const allData: any[] = [];
     let from = 0;
     let to = pageSize - 1;
