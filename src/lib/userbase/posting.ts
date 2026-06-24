@@ -74,6 +74,48 @@ export async function broadcastComment(
   );
 }
 
+// Generic custom_json broadcast signed with posting authority (follow, mute,
+// notify, reports, etc.). The op is always authorised as the signer's own
+// account.
+export async function broadcastCustomJson(
+  signer: Signer,
+  id: string,
+  json: string
+): Promise<void> {
+  await HiveClient.broadcast.json(
+    {
+      required_auths: [],
+      required_posting_auths: [signer.author],
+      id,
+      json,
+    },
+    PrivateKey.fromString(signer.key)
+  );
+}
+
+// account_update2 — only posting_json_metadata is changed (posting authority is
+// sufficient; we never touch keys/owner). json_metadata is left empty to mirror
+// the mobile client's updateProfile().
+export async function broadcastAccountUpdate(
+  signer: Signer,
+  postingJsonMetadata: string
+): Promise<void> {
+  await HiveClient.broadcast.sendOperations(
+    [
+      [
+        "account_update2",
+        {
+          account: signer.author,
+          json_metadata: "",
+          posting_json_metadata: postingJsonMetadata,
+          extensions: [],
+        },
+      ],
+    ],
+    PrivateKey.fromString(signer.key)
+  );
+}
+
 // Attribution records (only when posting via the shared account).
 export async function recordSoftPost(
   userId: string,
