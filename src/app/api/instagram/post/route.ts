@@ -13,6 +13,7 @@ import {
   verifyHiveSignature,
   getOrCreateHiveUserId,
 } from "@/lib/instagram/signatureAuth";
+import { resolveUserbaseUserId, getPrimaryHiveHandle } from "@/lib/userbase/session";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // Reels can poll up to ~3 min before publish
@@ -39,38 +40,60 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => null);
-  const hiveAuthor = typeof body?.hive_author === "string" ? body.hive_author.trim().toLowerCase() : "";
+  let hiveAuthor = typeof body?.hive_author === "string" ? body.hive_author.trim().toLowerCase() : "";
   const hivePermlink = typeof body?.hive_permlink === "string" ? body.hive_permlink.trim() : "";
   const signature = typeof body?.hive_signature === "string" ? body.hive_signature : "";
   const publicKey = typeof body?.hive_public_key === "string" ? body.hive_public_key : "";
   const issuedAt = typeof body?.signed_at === "string" ? body.signed_at : "";
 
-  if (!hiveAuthor || !hivePermlink || !signature || !publicKey || !issuedAt) {
-    return NextResponse.json(
-      { error: "Missing required fields (hive_author, hive_permlink, hive_signature, hive_public_key, signed_at)." },
-      { status: 400 }
-    );
+  if (!hivePermlink) {
+    return NextResponse.json({ error: "Missing hive_permlink." }, { status: 400 });
   }
 
-  // 1. Verify the signature proves ownership of hive_author.
-  const verified = await verifyHiveSignature({
-    message: buildIgAuthMessage({ hiveAuthor, hivePermlink, issuedAt }),
-    hiveAuthor,
-    hivePublicKey: publicKey,
-    hiveSignature: signature,
-    issuedAt,
-  });
-  if (!verified.ok) {
-    return NextResponse.json({ error: verified.error }, { status: verified.status });
+  // Auth: signature (mobile) OR userbase session (web cookie / bearer). Either
+  // path resolves the authenticated Hive author + a userbase user_id.
+  let userId: string | null;
+  if (signature && publicKey && issuedAt) {
+    if (!hiveAuthor) {
+      return NextResponse.json({ error: "Missing hive_author." }, { status: 400 });
+    }
+    const verified = await verifyHiveSignature({
+      message: buildIgAuthMessage({ hiveAuthor, hivePermlink, issuedAt }),
+      hiveAuthor,
+      hivePublicKey: publicKey,
+      hiveSignature: signature,
+      issuedAt,
+    });
+    if (!verified.ok) {
+      return NextResponse.json({ error: verified.error }, { status: verified.status });
+    }
+    userId = await getOrCreateHiveUserId(hiveAuthor);
+  } else {
+    userId = await resolveUserbaseUserId(req);
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const linked = await getPrimaryHiveHandle(userId);
+    if (!linked) {
+      return NextResponse.json(
+        { error: "Link a Hive account before cross-posting to Instagram." },
+        { status: 403 }
+      );
+    }
+    // Bind to the authenticated author; a client-supplied hive_author must match.
+    if (hiveAuthor && hiveAuthor !== linked.toLowerCase()) {
+      return NextResponse.json(
+        { error: "You can only cross-post your own snaps to Instagram." },
+        { status: 403 }
+      );
+    }
+    hiveAuthor = linked.toLowerCase();
   }
-
-  // 2. Resolve/auto-create the userbase user (for per-user limits + IG handle).
-  const userId = await getOrCreateHiveUserId(hiveAuthor);
   if (!userId) {
     return NextResponse.json({ error: "Could not resolve user." }, { status: 500 });
   }
 
-  // 3. Trusted-user gate (>=100 HP, on-chain, fail-closed).
+  // Trusted-user gate (>=100 HP, on-chain, fail-closed).
   const hivePower = await getHivePowerForAccount(hiveAuthor);
   if (hivePower === null || hivePower < MIN_HIVE_POWER_TO_CROSSPOST) {
     return NextResponse.json(
@@ -152,17 +175,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 7. Caption + collaborators.
+  // 7. Caption + collaborators. Honor a user-edited override / explicit
+  // collaborators (web review dialog); otherwise build server-side + default
+  // the collaborator to the author's resolved IG handle.
   const igHandle = await resolveIgHandleForCaption({ hiveAuthor, userId, supabase: supabaseAdmin });
-  const caption = buildInstagramCaption({
-    title,
-    body: markdown,
-    hiveAuthor,
-    permalinkUrl,
-    extraTags: tags,
-    igHandle,
-  });
-  const collaborators: string[] | undefined = igHandle ? [igHandle] : undefined;
+  const captionOverride = typeof body?.caption === "string" ? body.caption.trim() : "";
+  const caption = captionOverride
+    ? captionOverride.slice(0, 2200)
+    : buildInstagramCaption({ title, body: markdown, hiveAuthor, permalinkUrl, extraTags: tags, igHandle });
+  const collaborators: string[] | undefined = Array.isArray(body?.collaborators)
+    ? body.collaborators.filter((c: unknown): c is string => typeof c === "string")
+    : igHandle
+      ? [igHandle]
+      : undefined;
   const mediaType: "IMAGE" | "REELS" = videoUrl ? "REELS" : "IMAGE";
 
   // 8. Record queued row (insert or retry-update).

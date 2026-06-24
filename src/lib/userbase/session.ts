@@ -43,11 +43,16 @@ export function getBearerToken(req: Request): string | null {
   return token || null;
 }
 
-/** Validate the bearer token → user_id, or null if missing/expired/revoked. */
-export async function getBearerUserId(req: Request): Promise<string | null> {
+/** Read the userbase_refresh cookie value from a request, or null. */
+export function getCookieToken(req: Request): string | null {
+  const cookie = req.headers.get("cookie") || "";
+  const m = cookie.match(/(?:^|;\s*)userbase_refresh=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/** Resolve a raw session token → user_id (shared by bearer + cookie paths). */
+async function userIdForToken(token: string): Promise<string | null> {
   if (!supabaseAdmin) return null;
-  const token = getBearerToken(req);
-  if (!token) return null;
   const { data } = await supabaseAdmin
     .from("userbase_sessions")
     .select("id, user_id, expires_at, revoked_at")
@@ -58,6 +63,36 @@ export async function getBearerUserId(req: Request): Promise<string | null> {
   if (!session) return null;
   if (new Date(session.expires_at) < new Date()) return null;
   return session.user_id as string;
+}
+
+/** Validate the bearer token → user_id, or null if missing/expired/revoked. */
+export async function getBearerUserId(req: Request): Promise<string | null> {
+  const token = getBearerToken(req);
+  return token ? userIdForToken(token) : null;
+}
+
+/**
+ * Dual-transport session resolver: accepts BOTH `Authorization: Bearer <token>`
+ * (mobile) and `Cookie: userbase_refresh=<token>` (web). Both hash to the same
+ * userbase_sessions row, so one helper serves both clients — this is what lets
+ * api.skatehive.app own shared userbase endpoints for web + mobile.
+ */
+export async function resolveUserbaseUserId(req: Request): Promise<string | null> {
+  const token = getBearerToken(req) || getCookieToken(req);
+  return token ? userIdForToken(token) : null;
+}
+
+/** The user's primary linked Hive handle (or null). */
+export async function getPrimaryHiveHandle(userId: string): Promise<string | null> {
+  if (!supabaseAdmin) return null;
+  const { data } = await supabaseAdmin
+    .from("userbase_identities")
+    .select("handle")
+    .eq("user_id", userId)
+    .eq("type", "hive")
+    .order("is_primary", { ascending: false })
+    .limit(1);
+  return (data?.[0]?.handle as string) || null;
 }
 
 export async function revokeSessionByToken(token: string): Promise<void> {
