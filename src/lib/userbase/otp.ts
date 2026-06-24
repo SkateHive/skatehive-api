@@ -4,7 +4,8 @@ import { supabaseAdmin } from "@/app/utils/supabase/supabaseClient";
 // Server-side email OTP. The code is stored hashed (bound to the email) with a
 // short TTL + attempt cap, so it can't be brute-forced offline (we never return
 // anything code-derived to the client). Requires the `userbase_email_otps`
-// table — see src/lib/userbase/migrations/userbase_email_otps.sql.
+// table — canonical schema lives with the rest of userbase in
+// apps/skatehive3.0/sql/migrations/0024_userbase_email_otps.sql.
 
 const OTP_TTL_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
