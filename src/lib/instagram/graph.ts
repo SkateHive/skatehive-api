@@ -54,6 +54,75 @@ function isAuthError(error: string | undefined): boolean {
   return /access token|oauth|cannot parse|session has expired|code 190\b/i.test(error || "");
 }
 
+// Meta transient errors → retry the SAME credential after a short backoff.
+// 2207077 "Media could not be fetched" most often means the gateway/CDN isn't
+// serving a freshly-pinned IPFS CID yet (it warms up within a few seconds);
+// code 1/2 "unexpected error, please retry" and HTTP 5xx are Meta-side blips.
+// These resolve on retry — proven live: a video that failed at post time
+// published fine moments later, same CID, same account.
+function isTransientError(error: string | undefined): boolean {
+  return /could not be fetched|2207077|unexpected error|please (?:try again|retry)|temporar|timeout|timed out/i.test(
+    error || ""
+  );
+}
+
+const TRANSIENT_TRIES = 3;
+const TRANSIENT_BASE_DELAY_MS = 2000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// POST /media with bounded retry on transient (non-auth) errors. Auth errors
+// return immediately so withFailover can switch credentials; permanent media
+// errors (aspect ratio, duration, format) return immediately — retrying them
+// only wastes quota and time.
+async function createContainerWithRetry(
+  cfg: IgConfig,
+  searchParams: Record<string, string>,
+  label: string
+): Promise<{ ok: true; id: string } | { ok: false; error: string; authError: boolean }> {
+  let last: { ok: false; error: string; authError: boolean } = {
+    ok: false,
+    error: `Failed to create ${label}.`,
+    authError: false,
+  };
+  for (let i = 0; i < TRANSIENT_TRIES; i++) {
+    const res = await graphFetch(cfg, `/${cfg.igUserId}/media`, { method: "POST", searchParams });
+    if (res.ok && res.data?.id) return { ok: true, id: res.data.id };
+    const error = fbError(res.data, `Failed to create ${label}.`);
+    last = { ok: false, error, authError: isAuthError(error) };
+    if (last.authError || !isTransientError(error) || i === TRANSIENT_TRIES - 1) return last;
+    await sleep(TRANSIENT_BASE_DELAY_MS * (i + 1)); // 2s, then 4s — lets a fresh CID warm up
+  }
+  return last;
+}
+
+// POST /media_publish with bounded retry on transient (non-auth) errors.
+async function publishContainerWithRetry(
+  cfg: IgConfig,
+  containerId: string,
+  label: string
+): Promise<PublishResult> {
+  let lastErr = `Failed to publish ${label}.`;
+  let authError = false;
+  for (let i = 0; i < TRANSIENT_TRIES; i++) {
+    const res = await graphFetch(cfg, `/${cfg.igUserId}/media_publish`, {
+      method: "POST",
+      searchParams: { creation_id: containerId },
+    });
+    if (res.ok && res.data?.id) {
+      const mediaId: string = res.data.id;
+      return { success: true, containerId, mediaId, permalink: await fetchPermalink(cfg, mediaId) };
+    }
+    lastErr = fbError(res.data, `Failed to publish ${label}.`);
+    authError = isAuthError(lastErr);
+    if (authError || !isTransientError(lastErr) || i === TRANSIENT_TRIES - 1) break;
+    await sleep(TRANSIENT_BASE_DELAY_MS * (i + 1));
+  }
+  return { success: false, error: lastErr, authError };
+}
+
 async function graphFetch(
   cfg: IgConfig,
   path: string,
@@ -119,60 +188,36 @@ async function publishImageWith(
   cfg: IgConfig,
   input: { imageUrl: string; caption: string; collaborators?: string[] }
 ): Promise<PublishResult> {
-  const containerRes = await graphFetch(cfg, `/${cfg.igUserId}/media`, {
-    method: "POST",
-    searchParams: { image_url: input.imageUrl, caption: input.caption, ...collaboratorParam(input.collaborators) },
-  });
-  if (!containerRes.ok || !containerRes.data?.id) {
-    const error = fbError(containerRes.data, "Failed to create IG media container.");
-    return { success: false, error, authError: isAuthError(error) };
-  }
-  const containerId: string = containerRes.data.id;
-  const ready = await waitForContainerReady(cfg, containerId, 30_000, 1500);
+  const created = await createContainerWithRetry(
+    cfg,
+    { image_url: input.imageUrl, caption: input.caption, ...collaboratorParam(input.collaborators) },
+    "IG media container"
+  );
+  if (!created.ok) return { success: false, error: created.error, authError: created.authError };
+  const ready = await waitForContainerReady(cfg, created.id, 30_000, 1500);
   if (!ready.ok) return { success: false, error: ready.error };
-  const publishRes = await graphFetch(cfg, `/${cfg.igUserId}/media_publish`, {
-    method: "POST",
-    searchParams: { creation_id: containerId },
-  });
-  if (!publishRes.ok || !publishRes.data?.id) {
-    const error = fbError(publishRes.data, "Failed to publish IG media.");
-    return { success: false, error, authError: isAuthError(error) };
-  }
-  const mediaId: string = publishRes.data.id;
-  return { success: true, containerId, mediaId, permalink: await fetchPermalink(cfg, mediaId) };
+  return publishContainerWithRetry(cfg, created.id, "IG media");
 }
 
 async function publishReelWith(
   cfg: IgConfig,
   input: { videoUrl: string; caption: string; coverUrl?: string; collaborators?: string[] }
 ): Promise<PublishResult> {
-  const containerRes = await graphFetch(cfg, `/${cfg.igUserId}/media`, {
-    method: "POST",
-    searchParams: {
+  const created = await createContainerWithRetry(
+    cfg,
+    {
       media_type: "REELS",
       video_url: input.videoUrl,
       caption: input.caption,
       ...(input.coverUrl ? { cover_url: input.coverUrl } : {}),
       ...collaboratorParam(input.collaborators),
     },
-  });
-  if (!containerRes.ok || !containerRes.data?.id) {
-    const error = fbError(containerRes.data, "Failed to create IG Reel container.");
-    return { success: false, error, authError: isAuthError(error) };
-  }
-  const containerId: string = containerRes.data.id;
-  const ready = await waitForContainerReady(cfg, containerId, 180_000, 4000);
+    "IG Reel container"
+  );
+  if (!created.ok) return { success: false, error: created.error, authError: created.authError };
+  const ready = await waitForContainerReady(cfg, created.id, 180_000, 4000);
   if (!ready.ok) return { success: false, error: ready.error };
-  const publishRes = await graphFetch(cfg, `/${cfg.igUserId}/media_publish`, {
-    method: "POST",
-    searchParams: { creation_id: containerId },
-  });
-  if (!publishRes.ok || !publishRes.data?.id) {
-    const error = fbError(publishRes.data, "Failed to publish IG Reel.");
-    return { success: false, error, authError: isAuthError(error) };
-  }
-  const mediaId: string = publishRes.data.id;
-  return { success: true, containerId, mediaId, permalink: await fetchPermalink(cfg, mediaId) };
+  return publishContainerWithRetry(cfg, created.id, "IG Reel");
 }
 
 // Run a publish across configs, failing over only on auth-class errors.
