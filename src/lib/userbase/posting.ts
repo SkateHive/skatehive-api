@@ -58,20 +58,48 @@ export async function broadcastComment(
     title: string;
     body: string;
     jsonMetadata: Record<string, unknown>;
+    beneficiaries?: Array<{ account: string; weight: number }>;
   }
 ): Promise<void> {
-  await HiveClient.broadcast.comment(
-    {
-      parent_author: opts.parentAuthor,
-      parent_permlink: opts.parentPermlink,
-      author: signer.author,
-      permlink: opts.permlink,
-      title: opts.title,
-      body: opts.body,
-      json_metadata: JSON.stringify(opts.jsonMetadata),
-    },
-    PrivateKey.fromString(signer.key)
-  );
+  const ops: any[] = [
+    [
+      "comment",
+      {
+        parent_author: opts.parentAuthor,
+        parent_permlink: opts.parentPermlink,
+        author: signer.author,
+        permlink: opts.permlink,
+        title: opts.title,
+        body: opts.body,
+        json_metadata: JSON.stringify(opts.jsonMetadata),
+      },
+    ],
+  ];
+  if (opts.beneficiaries && opts.beneficiaries.length > 0) {
+    ops.push([
+      "comment_options",
+      {
+        author: signer.author,
+        permlink: opts.permlink,
+        max_accepted_payout: "1000000.000 HBD",
+        percent_hbd: 10000,
+        allow_votes: true,
+        allow_curation_rewards: true,
+        extensions: [
+          [
+            0,
+            {
+              beneficiaries: opts.beneficiaries.map((b) => ({
+                account: b.account,
+                weight: b.weight,
+              })),
+            },
+          ],
+        ],
+      },
+    ]);
+  }
+  await HiveClient.broadcast.sendOperations(ops, PrivateKey.fromString(signer.key));
 }
 
 // Generic custom_json broadcast signed with posting authority (follow, mute,
