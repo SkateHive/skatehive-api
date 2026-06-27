@@ -89,7 +89,12 @@ export async function POST(req: NextRequest) {
       author: signer.author,
       permlink,
       title,
-      type: parentAuthor ? "comment" : "post",
+      type:
+        typeof body?.type === "string" && ["post", "comment", "snap"].includes(body.type)
+          ? body.type
+          : parentAuthor
+          ? "comment"
+          : "post",
       metadata: {
         onchain: metadata,
         parent_author: parentAuthor,
