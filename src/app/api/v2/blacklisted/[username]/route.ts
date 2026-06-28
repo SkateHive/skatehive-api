@@ -47,7 +47,7 @@ LIMIT 1000 OFFSET ${validOffset};
             {
                 status: 200,
                 headers: {
-                    'Cache-Control': 's-maxage=300, stale-while-revalidate=150'
+                    'Cache-Control': 'public, max-age=0, must-revalidate', 'CDN-Cache-Control': 's-maxage=300, stale-while-revalidate=150', 'Vercel-CDN-Cache-Control': 's-maxage=300, stale-while-revalidate=150'
                 }
             }
         );

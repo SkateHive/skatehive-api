@@ -7,7 +7,7 @@ export async function GET() {
         const data = await getLeaderboard();
         return NextResponse.json(data, {
             headers: {
-                'Cache-Control': 's-maxage=500, stale-while-revalidate=300'
+                'Cache-Control': 'public, max-age=0, must-revalidate', 'CDN-Cache-Control': 's-maxage=500, stale-while-revalidate=300', 'Vercel-CDN-Cache-Control': 's-maxage=500, stale-while-revalidate=300'
             }
         });
     } catch (error) {
