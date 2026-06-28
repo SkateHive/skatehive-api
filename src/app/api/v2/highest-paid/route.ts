@@ -148,7 +148,13 @@ export async function GET(request: NextRequest) {
             }
         }, {
             headers: {
-                'Cache-Control': 's-maxage=300, stale-while-revalidate=600',
+                // Next.js strips s-maxage from DYNAMIC route handlers' Cache-Control
+                // (this route reads searchParams), forcing max-age=0 at the CDN. Drive the
+                // Vercel edge cache with CDN-Cache-Control / Vercel-CDN-Cache-Control, which
+                // are passed through untouched. Browser still revalidates (max-age=0).
+                'Cache-Control': 'public, max-age=0, must-revalidate',
+                'CDN-Cache-Control': 's-maxage=300, stale-while-revalidate=600',
+                'Vercel-CDN-Cache-Control': 's-maxage=300, stale-while-revalidate=600',
                 'X-Cache-Source': cacheSource,
                 'X-Execution-Time': `${executionTime}ms`
             }
