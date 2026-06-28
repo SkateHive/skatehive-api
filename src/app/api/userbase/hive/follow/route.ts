@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBearerUserId } from "@/lib/userbase/session";
+import { resolveUserbaseUserId } from "@/lib/userbase/session";
 import { resolveSigner, broadcastCustomJson } from "@/lib/userbase/posting";
 
 export const runtime = "nodejs";
@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 // Follow/mute on behalf of a userbase user (server signs with their own stored
 // key). Disallowed for lite accounts on the shared @skateuser account.
 export async function POST(req: NextRequest) {
-  const userId = await getBearerUserId(req);
+  const userId = await resolveUserbaseUserId(req);
   if (!userId) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }

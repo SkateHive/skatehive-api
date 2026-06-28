@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBearerUserId, getUserPublic } from "@/lib/userbase/session";
+import { resolveUserbaseUserId, getUserPublic } from "@/lib/userbase/session";
 
 export const runtime = "nodejs";
 
 // Validate a bearer session token → current user.
 export async function GET(req: NextRequest) {
-  const userId = await getBearerUserId(req);
+  const userId = await resolveUserbaseUserId(req);
   if (!userId) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }

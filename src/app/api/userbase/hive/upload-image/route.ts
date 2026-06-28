@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { PrivateKey } from "@hiveio/dhive";
-import { getBearerUserId } from "@/lib/userbase/session";
+import { resolveUserbaseUserId } from "@/lib/userbase/session";
 import { resolveSigner } from "@/lib/userbase/posting";
 
 export const runtime = "nodejs";
@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 // Hive image-upload challenge with the user's key — or the shared @skateuser
 // account — and uploads to images.hive.blog, returning the public URL.
 export async function POST(req: NextRequest) {
-  const userId = await getBearerUserId(req);
+  const userId = await resolveUserbaseUserId(req);
   if (!userId) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }

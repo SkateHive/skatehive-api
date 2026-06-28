@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBearerUserId } from "@/lib/userbase/session";
+import { resolveUserbaseUserId } from "@/lib/userbase/session";
 import { resolveSigner, broadcastVote, recordSoftVote } from "@/lib/userbase/posting";
 import { getSafeUserIdentifier } from "@/lib/userbase/safeUser";
 
@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 // Vote on behalf of a userbase user (server signs with their stored key, or the
 // shared @skateuser account for lite accounts).
 export async function POST(req: NextRequest) {
-  const userId = await getBearerUserId(req);
+  const userId = await resolveUserbaseUserId(req);
   if (!userId) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }

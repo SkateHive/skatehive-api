@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBearerUserId } from "@/lib/userbase/session";
+import { resolveUserbaseUserId } from "@/lib/userbase/session";
 import { resolveSigner, broadcastCustomJson } from "@/lib/userbase/posting";
 
 export const runtime = "nodejs";
@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 // endpoint performs no encryption — it just receives the already-built
 // custom_json content and broadcasts it under the user's posting authority.
 export async function POST(req: NextRequest) {
-  const userId = await getBearerUserId(req);
+  const userId = await resolveUserbaseUserId(req);
   if (!userId) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
