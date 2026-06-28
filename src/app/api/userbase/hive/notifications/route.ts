@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBearerUserId } from "@/lib/userbase/session";
+import { resolveUserbaseUserId } from "@/lib/userbase/session";
 import { resolveSigner, broadcastCustomJson } from "@/lib/userbase/posting";
 
 export const runtime = "nodejs";
@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 // their behalf. Requires the user's own Hive account — the shared @skateuser
 // account's notifications must never be touched, and lite accounts have none.
 export async function POST(req: NextRequest) {
-  const userId = await getBearerUserId(req);
+  const userId = await resolveUserbaseUserId(req);
   if (!userId) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }

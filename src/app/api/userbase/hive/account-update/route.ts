@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBearerUserId } from "@/lib/userbase/session";
+import { resolveUserbaseUserId } from "@/lib/userbase/session";
 import { resolveSigner, broadcastAccountUpdate } from "@/lib/userbase/posting";
 import { HiveClient } from "@/app/utils/hive/hiveUtils";
 
@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 // unedited fields intact even when the client's merge-base was wrong/empty
 // (e.g. a userbase handle that differs from the on-chain account).
 export async function POST(req: NextRequest) {
-  const userId = await getBearerUserId(req);
+  const userId = await resolveUserbaseUserId(req);
   if (!userId) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }

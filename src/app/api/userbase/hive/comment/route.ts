@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBearerUserId } from "@/lib/userbase/session";
+import { resolveUserbaseUserId } from "@/lib/userbase/session";
 import { resolveSigner, broadcastComment, recordSoftPost } from "@/lib/userbase/posting";
 import { getSafeUserIdentifier } from "@/lib/userbase/safeUser";
 
@@ -13,7 +13,7 @@ function genPermlink(): string {
 // user's stored key, or the shared @skateuser account for lite accounts —
 // recording attribution + embedding the safe-user id for the feed overlay.
 export async function POST(req: NextRequest) {
-  const userId = await getBearerUserId(req);
+  const userId = await resolveUserbaseUserId(req);
   if (!userId) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
