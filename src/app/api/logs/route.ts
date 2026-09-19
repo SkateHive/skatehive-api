@@ -10,7 +10,7 @@ const LOG_SOURCES = [
     id: 'macmini-video',
     name: 'Mac Mini · video',
     type: 'transcode' as const,
-    url: 'https://minivlad.tail83ea3e.ts.net/video/logs?limit=25',
+    url: 'https://transcode.skatehive.app/macmini/video/logs?limit=25',
   },
   {
     id: 'oracle-video',
@@ -22,7 +22,7 @@ const LOG_SOURCES = [
     id: 'macmini-ig',
     name: 'Mac Mini · instagram',
     type: 'instagram' as const,
-    url: 'https://minivlad.tail83ea3e.ts.net/instagram/logs?limit=25',
+    url: 'https://transcode.skatehive.app/macmini/instagram/logs?limit=25',
   },
 ];
 
