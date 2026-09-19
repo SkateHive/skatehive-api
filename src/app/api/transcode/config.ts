@@ -1,7 +1,7 @@
 // Shared configuration for transcode services.
 // All servers run the same SkateHive video-transcoder codebase.
-// Prefer the public Oracle endpoint; the Mac Mini Funnel currently has
-// intermittent external TLS stalls even while local health checks succeed.
+// Both workers use public HTTPS ingress. Mac Mini is reached over a private,
+// supervised tunnel, removing public Tailscale Funnel from the upload path.
 // IMPORTANT: video blobs should upload directly to transcoder hosts. Do not route
 // normal uploads through Vercel/API functions; serverless body limits cause 413
 // FUNCTION_PAYLOAD_TOO_LARGE before the transcoder sees the file.
@@ -15,8 +15,8 @@ export const TRANSCODE_SERVICES = [
   {
     priority: 2,
     name: 'Mac Mini M4 (Secondary)',
-    healthUrl: 'https://minivlad.tail83ea3e.ts.net/video/healthz',
-    transcodeUrl: 'https://minivlad.tail83ea3e.ts.net/video/transcode'
+    healthUrl: 'https://transcode.skatehive.app/macmini/video/healthz',
+    transcodeUrl: 'https://transcode.skatehive.app/macmini/video/transcode'
   }
 ];
 
@@ -25,7 +25,7 @@ export const TRANSCODE_SERVICES = [
 // header. Safe to default to production like TRANSCODE_SERVICES above —
 // this endpoint is meant to always be live.
 export const THUMBNAIL_SERVICE_URL =
-  process.env.THUMBNAIL_SERVICE_URL || 'https://minivlad.tail83ea3e.ts.net/video/thumbnail';
+  process.env.THUMBNAIL_SERVICE_URL || 'https://transcode.skatehive.app/macmini/video/thumbnail';
 
 // Spotmap admin images (thumbnail_small for spot photos hosted off the Hive
 // CDN): the transcoder's POST /image-thumbnail endpoint, guarded by the SAME

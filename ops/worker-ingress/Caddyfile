@@ -1,0 +1,31 @@
+transcode.skatehive.app {
+    request_body {
+        max_size 512MB
+    }
+
+    # Mac workers travel over a supervised SSH reverse tunnel, never Funnel.
+    # Loopback-only listeners cannot be accessed directly from the internet.
+    handle_path /macmini/video/* {
+        reverse_proxy 127.0.0.1:18081 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 30m
+            }
+            flush_interval -1
+        }
+    }
+    handle_path /macmini/instagram/* {
+        reverse_proxy 127.0.0.1:16666 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 5m
+            }
+        }
+    }
+
+    # Existing Oracle endpoint remains backward compatible.
+    # Do not replay POSTs against another worker: the first may be processing.
+    handle {
+        reverse_proxy 127.0.0.1:8081
+    }
+}

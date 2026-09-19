@@ -42,7 +42,7 @@ const SERVICE_DEFINITIONS: ServiceDefinition[] = [
     name: 'Mac Mini IG',
     category: 'Instagram Downloader',
     description: 'Mac Mini Instagram downloader / helper',
-    healthUrl: 'https://minivlad.tail83ea3e.ts.net/instagram/healthz',
+    healthUrl: 'https://transcode.skatehive.app/macmini/instagram/healthz',
   },
   ...TRANSCODE_SERVICES.map((service) => ({
     id: `transcode-${service.priority}`,
