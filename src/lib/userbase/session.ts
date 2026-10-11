@@ -8,6 +8,8 @@ import { supabaseAdmin } from "@/app/utils/supabase/supabaseClient";
 // bearer tokens are interchangeable session rows.
 
 const SESSION_TTL_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SESSION_TTL_MS = SESSION_TTL_DAYS * DAY_MS;
 
 export function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
@@ -20,9 +22,7 @@ export async function createSession(
 ): Promise<{ token: string; expiresAt: string }> {
   if (!supabaseAdmin) throw new Error("Userbase backend not configured");
   const token = crypto.randomUUID();
-  const expiresAt = new Date(
-    Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000
-  ).toISOString();
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
   const { error } = await supabaseAdmin.from("userbase_sessions").insert({
     user_id: userId,
     refresh_token_hash: hashToken(token),
@@ -61,8 +61,33 @@ async function userIdForToken(token: string): Promise<string | null> {
     .limit(1);
   const session = data?.[0];
   if (!session) return null;
-  if (new Date(session.expires_at) < new Date()) return null;
+  const expiresAt = new Date(session.expires_at).getTime();
+  if (expiresAt < Date.now()) return null;
+  await extendSessionIfStale(session.id, expiresAt);
   return session.user_id as string;
+}
+
+/**
+ * Sliding expiry: a session that is still being used never runs out. The app
+ * keeps its token for good, so a fixed 30 days silently logged active skaters
+ * out and every signed action came back "Unauthorized". Extends at most once a
+ * day per session; a failed write never blocks the request.
+ */
+async function extendSessionIfStale(
+  sessionId: string,
+  expiresAt: number
+): Promise<void> {
+  if (!supabaseAdmin) return;
+  if (expiresAt - Date.now() > SESSION_TTL_MS - DAY_MS) return;
+  try {
+    const { error } = await supabaseAdmin
+      .from("userbase_sessions")
+      .update({ expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString() })
+      .eq("id", sessionId);
+    if (error) console.warn("[userbase/session] extend failed", error.message);
+  } catch (e) {
+    console.warn("[userbase/session] extend failed", e);
+  }
 }
 
 /** Validate the bearer token → user_id, or null if missing/expired/revoked. */

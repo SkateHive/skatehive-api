@@ -32,6 +32,7 @@ export function makeFakeSupabase(responses: Record<string, FakeResult[]>) {
       gte: (...a: any[]) => { record("gte", a); return builder; },
       lte: (...a: any[]) => { record("lte", a); return builder; },
       lt: (...a: any[]) => { record("lt", a); return builder; },
+      is: (...a: any[]) => { record("is", a); return builder; },
       order: (...a: any[]) => { record("order", a); return builder; },
       limit: (...a: any[]) => { record("limit", a); return builder; },
       insert: (...a: any[]) => { record("insert", a); return builder; },
