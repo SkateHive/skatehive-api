@@ -147,4 +147,46 @@ describe("GET /api/spotmap", () => {
     const res = await GET();
     expect(res.status).toBe(500);
   });
+
+  it("adds thumbnail_medium, falling back to the full image until a medium exists", async () => {
+    const { GET } = await loadRoute({
+      supabase: {
+        spotmap_spots: [{
+          data: [
+            spotRow({ id: "a", thumbnail_medium: "https://ipfs.skatehive.app/ipfs/bafyMed", thumbnail_small: "https://s/a" }),
+            spotRow({ id: "b", thumbnail_override: "https://o/b.jpg", thumbnail_small: "https://s/b" }),
+          ],
+          error: null,
+        }],
+      },
+    });
+    const body = await (await GET()).json();
+    expect(body.spots[0].thumbnail_medium).toBe("https://ipfs.skatehive.app/ipfs/bafyMed");
+    expect(body.spots[1].thumbnail_medium).toBe("https://o/b.jpg");
+    expect(body.spots[0]).not.toHaveProperty("thumbnail_override");
+  });
+
+  it("retries without thumbnail_medium before the column exists (42703)", async () => {
+    const { GET } = await loadRoute({
+      supabase: {
+        spotmap_spots: [
+          { data: null, error: { code: "42703", message: "column spotmap_spots.thumbnail_medium does not exist" } },
+          { data: [spotRow({ thumbnail_small: "https://s/1" })], error: null },
+        ],
+      },
+    });
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.spots[0].thumbnail_medium).toBe("https://images.hive.blog/DQmAbc/photo.jpg");
+  });
+
+  it("still returns 500 for other query errors", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { GET } = await loadRoute({
+      supabase: { spotmap_spots: [{ data: null, error: { code: "57014", message: "statement timeout" } }] },
+    });
+    expect((await GET()).status).toBe(500);
+    errSpy.mockRestore();
+  });
 });

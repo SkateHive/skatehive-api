@@ -1,6 +1,7 @@
 import { NextResponse, after } from "next/server";
 import { supabaseAdmin } from "@/app/utils/supabase/supabaseClient";
 import { resolveSmallThumbnail } from "@/lib/spotmap-thumbnails";
+import { isMissingMediumColumn } from "@/lib/spotmap-medium";
 
 // Cap how many rows one GET can kick off generation for. The backfill script
 // is the primary way a large batch of missing thumbnails gets filled in —
@@ -20,10 +21,26 @@ interface SpotRow {
   thumbnail: string | null;
   thumbnail_override: string | null;
   thumbnail_small: string | null;
+  // Not selected until the spotmap medium migration is applied (see below).
+  thumbnail_medium?: string | null;
   hive_author: string | null;
   hive_permlink: string | null;
   hive_created: string | null;
   kml_description: string | null;
+}
+
+const BASE_COLUMNS =
+  "id, source, source_id, name, lat, lng, address, thumbnail, " +
+  "thumbnail_override, thumbnail_small, " +
+  "hive_author, hive_permlink, hive_created, kml_description";
+
+function selectSpots(withMedium: boolean) {
+  return supabaseAdmin!
+    .from("spotmap_spots")
+    .select(withMedium ? `${BASE_COLUMNS}, thumbnail_medium` : BASE_COLUMNS)
+    .order("hive_created", { ascending: false, nullsFirst: false })
+    .limit(10000)
+    .returns<SpotRow[]>();
 }
 
 // Public read endpoint for the synced skate-spot map. Mirrored from the
@@ -40,16 +57,12 @@ export async function GET() {
     );
   }
 
-  const { data, error } = await supabaseAdmin
-    .from("spotmap_spots")
-    .select(
-      "id, source, source_id, name, lat, lng, address, thumbnail, " +
-        "thumbnail_override, thumbnail_small, " +
-        "hive_author, hive_permlink, hive_created, kml_description"
-    )
-    .order("hive_created", { ascending: false, nullsFirst: false })
-    .limit(10000)
-    .returns<SpotRow[]>();
+  const { data, error } = await selectSpots(true).then((first) =>
+    // thumbnail_medium arrives with a web-owned migration. Until it is
+    // applied, PostgREST rejects the column (42703); retry without it so the
+    // endpoint keeps working before and after the migration.
+    first.error && isMissingMediumColumn(first.error) ? selectSpots(false) : first
+  );
 
   if (error) {
     console.error("[GET /api/spotmap] query failed", error);
@@ -60,12 +73,14 @@ export async function GET() {
   }
 
   const rows = data ?? [];
-  const spots = rows.map(({ thumbnail_override, thumbnail_small, ...rest }) => {
+  const spots = rows.map(({ thumbnail_override, thumbnail_small, thumbnail_medium, ...rest }) => {
     const coalescedThumbnail = thumbnail_override || rest.thumbnail;
     return {
       ...rest,
       thumbnail: coalescedThumbnail,
       thumbnail_small: thumbnail_small || coalescedThumbnail,
+      // ~800px variant for detail heroes; see src/lib/spotmap-medium.ts.
+      thumbnail_medium: thumbnail_medium || coalescedThumbnail,
     };
   });
 
