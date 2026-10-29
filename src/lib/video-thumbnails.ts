@@ -59,6 +59,25 @@ async function fetchThumbnailFromPinata(hash: string): Promise<string | null> {
   }
 }
 
+// One query for a whole page of CIDs instead of one round trip per video.
+async function getThumbnailRows(cids: string[]): Promise<Map<string, ThumbnailRow>> {
+  const rows = new Map<string, ThumbnailRow>();
+  if (!supabaseAdmin || cids.length === 0) return rows;
+  const { data } = await supabaseAdmin
+    .from("video_thumbnails")
+    .select("cid, thumbnail_url, status, attempts, updated_at")
+    .in("cid", cids);
+  for (const row of (data as ThumbnailRow[] | null) || []) rows.set(row.cid, row);
+  return rows;
+}
+
+// A row the transcoder has given up on. Pinata was already checked before the
+// row was ever created, so asking it again only adds a slow call (up to
+// PINATA_TIMEOUT_MS) on every cold instance for a result that won't change.
+function isTerminal(row: ThumbnailRow | undefined): boolean {
+  return !!row && row.status === "failed" && row.attempts >= MAX_ATTEMPTS;
+}
+
 async function getThumbnailRow(cid: string): Promise<ThumbnailRow | null> {
   if (!supabaseAdmin) return null;
   const { data } = await supabaseAdmin
@@ -193,11 +212,17 @@ export async function resolveThumbnails(videos: VideoEntry[]): Promise<VideoEntr
   const uniqueHashes = Array.from(new Set(missing.map((e) => e.hash)));
   const resolved = new Map<string, string | null>();
 
+  const rows = await getThumbnailRows(uniqueHashes);
+
   await Promise.all(
     uniqueHashes.map(async (cid) => {
-      const row = await getThumbnailRow(cid);
+      const row = rows.get(cid);
       if (row?.status === "ready" && row.thumbnail_url) {
         resolved.set(cid, row.thumbnail_url);
+        return;
+      }
+      if (isTerminal(row)) {
+        resolved.set(cid, null);
         return;
       }
 
@@ -208,7 +233,7 @@ export async function resolveThumbnails(videos: VideoEntry[]): Promise<VideoEntr
       }
 
       resolved.set(cid, null);
-      await queueTranscoderJob(cid, row);
+      await queueTranscoderJob(cid, row ?? null);
     })
   );
 

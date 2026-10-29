@@ -1,25 +1,43 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { HAFSQL_Database } from '@/lib/hafsql_database';
 import { extractVideosFromPost, VideoEntry } from '@/lib/video-extraction';
 import { resolveThumbnails } from '@/lib/video-thumbnails';
 import { buildVideoPostsQuery } from '@/lib/video-posts-query';
 import { normalizeHafVotes } from '@/app/api/v2/feed/helpers';
+import { SwrCache, type SwrState } from '@/lib/swr-cache';
 
 const hafDb = new HAFSQL_Database();
 
-// Short TTL so new posts appear quickly (60s vs feed's 5min)
-const cache: Map<string, { data: VideoEntry[]; timestamp: number }> = new Map();
-const activeUpdates = new Set<string>();
-const CACHE_TTL = 60_000; // 1 minute
+// Freshness budget. New posts show up within FRESH_MS in the normal case; a
+// request after a quiet period can get a response up to STALE_MS old while a
+// refresh runs in the background (instead of blocking on a cold scan).
+const FRESH_MS = 60_000;
+const STALE_MS = 10 * 60_000;
 
-function cleanupCache() {
-  const now = Date.now();
-  for (const [key, value] of cache.entries()) {
-    if (now - value.timestamp > CACHE_TTL) {
-      cache.delete(key);
-    }
+// Edge cache. s-maxage matches FRESH_MS. stale-while-revalidate lets the
+// Vercel edge answer instantly with the previous page while it refetches, so
+// the first request after a quiet period doesn't pay the cold path.
+const EDGE_CACHE = 's-maxage=60, stale-while-revalidate=300';
+
+// Run background refreshes after the response is sent. after() keeps the
+// function alive for them on Vercel; outside a request scope (tests, scripts)
+// fall back to a detached promise.
+function scheduleAfterResponse(task: () => Promise<void>) {
+  try {
+    after(task);
+  } catch {
+    void task();
   }
 }
+
+type VideosPage = { videos: VideoEntry[]; hasMore: boolean; timing: Timing };
+type Timing = { dbMs: number; thumbsMs: number; batches: number };
+
+// Whole pages, keyed by query. Shared by concurrent requests and retries.
+const pageCache = new SwrCache<VideosPage>({ freshMs: FRESH_MS, staleMs: STALE_MS, schedule: scheduleAfterResponse });
+// Raw HAFSQL batches. Pages scan from offset 0, so page 2 and 3 reuse the
+// batches page 1 already loaded instead of re-running the same query.
+const batchCache = new SwrCache<any[]>({ freshMs: FRESH_MS, staleMs: FRESH_MS, maxEntries: 100 });
 
 const PARENT_PERMLINK = process.env.PARENT_PERMLINK || '';
 
@@ -31,14 +49,17 @@ async function fetchVideoPostsBatch(
   limit: number,
   offset: number,
 ): Promise<any[]> {
-  const { query, params } = buildVideoPostsQuery(community, parentPermlink, author, limit, offset);
-  const result = await hafDb.executeQuery(query, params);
-
-  // Normalize votes from HAFSQL json_agg
-  return result.rows.map(row => ({
-    ...row,
-    votes: normalizeHafVotes(row.votes),
-  }));
+  const key = `${community}:${parentPermlink}:${author}:${limit}:${offset}`;
+  const { value } = await batchCache.get(key, async () => {
+    const { query, params } = buildVideoPostsQuery(community, parentPermlink, author, limit, offset);
+    const result = await hafDb.executeQuery(query, params);
+    // Normalize votes from HAFSQL json_agg
+    return result.rows.map(row => ({
+      ...row,
+      votes: normalizeHafVotes(row.votes),
+    }));
+  });
+  return value;
 }
 
 /**
@@ -51,11 +72,12 @@ async function fetchVideos(
   author: string,
   targetCount: number,
   page: number,
-): Promise<{ videos: VideoEntry[]; hasMore: boolean }> {
+): Promise<VideosPage> {
   const videos: VideoEntry[] = [];
   const BATCH_SIZE = targetCount * 3; // overfetch ratio
   const MAX_ITERATIONS = 4; // safety cap
   const startOffset = (page - 1) * targetCount;
+  const timing: Timing = { dbMs: 0, thumbsMs: 0, batches: 0 };
 
   // We need to skip `startOffset` worth of video entries, then collect `targetCount`
   let dbOffset = 0;
@@ -64,7 +86,10 @@ async function fetchVideos(
 
   while (videos.length < targetCount && iterations < MAX_ITERATIONS) {
     iterations++;
+    const t0 = Date.now();
     const rows = await fetchVideoPostsBatch(community, parentPermlink, author, BATCH_SIZE, dbOffset);
+    timing.dbMs += Date.now() - t0;
+    timing.batches++;
 
     if (rows.length === 0) break; // no more posts
 
@@ -91,32 +116,26 @@ async function fetchVideos(
   const hasMore = videos.length >= targetCount;
 
   // Resolve thumbnails: metadata/body (already set) -> our cache -> Pinata -> transcoder
+  const t1 = Date.now();
   const resolvedVideos = await resolveThumbnails(videos);
+  timing.thumbsMs = Date.now() - t1;
 
-  return { videos: resolvedVideos, hasMore };
+  return { videos: resolvedVideos, hasMore, timing };
 }
 
-async function updateCacheInBackground(
-  community: string,
-  parentPermlink: string,
-  author: string,
-  targetCount: number,
-  page: number,
-  cacheKey: string,
-) {
-  if (activeUpdates.has(cacheKey)) return;
-  activeUpdates.add(cacheKey);
-  try {
-    const { videos } = await fetchVideos(community, parentPermlink, author, targetCount, page);
-    cache.set(cacheKey, { data: videos, timestamp: Date.now() });
-  } catch (error) {
-    console.error('Background video cache update failed:', error);
-  } finally {
-    activeUpdates.delete(cacheKey);
-  }
+function serverTiming(state: SwrState, totalMs: number, timing: Timing): string {
+  // db/thumbs describe the run that BUILT this page (it may be an earlier,
+  // cached run); total and cache describe this request.
+  return [
+    `cache;desc="${state}"`,
+    `total;dur=${totalMs}`,
+    `db;dur=${timing.dbMs};desc="${timing.batches} batch(es)"`,
+    `thumbs;dur=${timing.thumbsMs}`,
+  ].join(', ');
 }
 
 export async function GET(request: NextRequest) {
+  const started = Date.now();
   const { searchParams } = new URL(request.url);
   const community = searchParams.get('community_code') || process.env.MY_COMMUNITY_CATEGORY || 'hive-173115';
   const author = (searchParams.get('author') || '').trim().toLowerCase();
@@ -124,43 +143,28 @@ export async function GET(request: NextRequest) {
   const limit = Math.min(50, Math.max(1, Number(searchParams.get('limit')) || 20));
 
   try {
-    cleanupCache();
-
     const cacheKey = `videos:${community}:${author}:${page}:${limit}`;
-    const cached = cache.get(cacheKey);
-
-    let videos: VideoEntry[];
-    let hasMore: boolean;
-
-    if (cached) {
-      videos = cached.data;
-      hasMore = videos.length >= limit;
-      console.log(`[videos] cache hit: ${cacheKey}, ${videos.length} videos`);
-    } else {
-      console.log(`[videos] cache miss: ${cacheKey}`);
-      const result = await fetchVideos(community, PARENT_PERMLINK, author, limit, page);
-      videos = result.videos;
-      hasMore = result.hasMore;
-      cache.set(cacheKey, { data: videos, timestamp: Date.now() });
-    }
-
-    // Always refresh in background so next request is fresh
-    setTimeout(() => updateCacheInBackground(community, PARENT_PERMLINK, author, limit, page, cacheKey), 0);
+    const { value, state } = await pageCache.get(cacheKey, () =>
+      fetchVideos(community, PARENT_PERMLINK, author, limit, page),
+    );
+    console.log(`[videos] ${state}: ${cacheKey}, ${value.videos.length} videos, ${Date.now() - started}ms`);
 
     return NextResponse.json({
       success: true,
-      data: videos,
+      data: value.videos,
       pagination: {
         currentPage: page,
         limit,
-        hasNextPage: hasMore,
-        nextPage: hasMore ? page + 1 : null,
+        hasNextPage: value.hasMore,
+        nextPage: value.hasMore ? page + 1 : null,
       },
     }, {
       status: 200,
       headers: {
-        // Short edge cache: 60s serve, 30s stale-while-revalidate
-        'Cache-Control': 's-maxage=60, stale-while-revalidate=30',
+        'Cache-Control': EDGE_CACHE,
+        // Mirrors the other v2 reads (#34); passes to the Vercel edge untouched.
+        'CDN-Cache-Control': EDGE_CACHE,
+        'Server-Timing': serverTiming(state, Date.now() - started, value.timing),
       },
     });
 
@@ -178,3 +182,4 @@ export async function GET(request: NextRequest) {
     }, { status: 500 });
   }
 }
+
