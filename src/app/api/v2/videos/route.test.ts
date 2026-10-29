@@ -102,6 +102,8 @@ describe("GET /api/v2/videos", () => {
     const stale = await GET(url("page=1&limit=30"));
     expect((await stale.json()).data[0].title).toBe("gen1");
     expect(stale.headers.get("server-timing")).toContain('cache;desc="stale"');
+    // The edge must not keep a process-stale page as if it were fresh.
+    expect(stale.headers.get("cdn-cache-control")).toBe("s-maxage=5, stale-while-revalidate=60");
     expect(exec).toHaveBeenCalledTimes(1);
     expect(scheduled).toHaveLength(1);
 
@@ -109,6 +111,27 @@ describe("GET /api/v2/videos", () => {
     const fresh = await GET(url("page=1&limit=30"));
     expect((await fresh.json()).data[0].title).toBe("gen2");
     expect(fresh.headers.get("server-timing")).toContain('cache;desc="hit"');
+  });
+
+  it("keeps author, limit and page in separate cache entries", async () => {
+    const { GET, exec } = await loadRoute(async (_q, params) => {
+      const author = params.find((p: any) => p.name === "author").value;
+      const limit = params.find((p: any) => p.name === "limit").value;
+      const offset = offsetOf(params);
+      return {
+        rows: Array.from({ length: limit }, (_, i) => ({ ...postRow(offset + i), author: author || `skater${offset + i}` })),
+        headers: [],
+      };
+    });
+
+    const all = await (await GET(url("page=1&limit=10"))).json();
+    const mine = await (await GET(url("page=1&limit=10&author=Alice"))).json();
+    const wider = await (await GET(url("page=1&limit=20"))).json();
+
+    expect(all.data[0].author).toBe("skater0");
+    expect(mine.data.every((v: any) => v.author === "alice")).toBe(true); // lower-cased, not served from the unfiltered entry
+    expect(wider.data).toHaveLength(20);
+    expect(exec).toHaveBeenCalledTimes(3);
   });
 
   it("does not start a background refresh on a fresh hit", async () => {

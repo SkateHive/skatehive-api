@@ -12,12 +12,18 @@ const hafDb = new HAFSQL_Database();
 // request after a quiet period can get a response up to STALE_MS old while a
 // refresh runs in the background (instead of blocking on a cold scan).
 const FRESH_MS = 60_000;
-const STALE_MS = 10 * 60_000;
+const STALE_MS = 5 * 60_000;
 
 // Edge cache. s-maxage matches FRESH_MS. stale-while-revalidate lets the
 // Vercel edge answer instantly with the previous page while it refetches, so
 // the first request after a quiet period doesn't pay the cold path.
 const EDGE_CACHE = 's-maxage=60, stale-while-revalidate=300';
+// A page served from this process's STALE entry must not be stored by the
+// edge as if it were fresh, or the two stale windows stack (memory 5 min +
+// edge 6 min). Keep it at the edge only briefly; the background refresh has
+// a fresh page ready by the next revalidation. Worst-case content age stays
+// ~7 min (fresh memory 60s + edge 60s + 300s stale).
+const EDGE_CACHE_FOR_STALE = 's-maxage=5, stale-while-revalidate=60';
 
 // Run background refreshes after the response is sent. after() keeps the
 // function alive for them on Vercel; outside a request scope (tests, scripts)
@@ -161,9 +167,9 @@ export async function GET(request: NextRequest) {
     }, {
       status: 200,
       headers: {
-        'Cache-Control': EDGE_CACHE,
+        'Cache-Control': state === 'stale' ? EDGE_CACHE_FOR_STALE : EDGE_CACHE,
         // Mirrors the other v2 reads (#34); passes to the Vercel edge untouched.
-        'CDN-Cache-Control': EDGE_CACHE,
+        'CDN-Cache-Control': state === 'stale' ? EDGE_CACHE_FOR_STALE : EDGE_CACHE,
         'Server-Timing': serverTiming(state, Date.now() - started, value.timing),
       },
     });
