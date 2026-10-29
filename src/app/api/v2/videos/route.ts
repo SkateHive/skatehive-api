@@ -37,7 +37,15 @@ function scheduleAfterResponse(task: () => Promise<void>) {
 }
 
 type VideosPage = { videos: VideoEntry[]; hasMore: boolean; timing: Timing };
-type Timing = { dbMs: number; thumbsMs: number; batches: number };
+type Timing = { dbMs: number; thumbsMs: number; batches: number; thumbsCut?: boolean };
+
+// Wall-clock cap on thumbnail resolution inside the request. Missing
+// thumbnails may need a Pinata lookup (up to 5s each, re-done on every cold
+// instance). Past the budget the page goes out with what it has: those
+// entries keep thumbnailUrl null (mobile already has an on-device
+// fallback), and resolution finishes after the response so the next refresh
+// picks the results up.
+const THUMBS_BUDGET_MS = 1500;
 
 // Whole pages, keyed by query. Shared by concurrent requests and retries.
 const pageCache = new SwrCache<VideosPage>({ freshMs: FRESH_MS, staleMs: STALE_MS, schedule: scheduleAfterResponse });
@@ -123,7 +131,23 @@ async function fetchVideos(
 
   // Resolve thumbnails: metadata/body (already set) -> our cache -> Pinata -> transcoder
   const t1 = Date.now();
-  const resolvedVideos = await resolveThumbnails(videos);
+  const resolving = resolveThumbnails(videos);
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<null>((resolve) => {
+    budgetTimer = setTimeout(() => resolve(null), THUMBS_BUDGET_MS);
+  });
+  const raced = await Promise.race([resolving, budget]);
+  clearTimeout(budgetTimer);
+  let resolvedVideos: VideoEntry[];
+  if (raced) {
+    resolvedVideos = raced;
+  } else {
+    timing.thumbsCut = true;
+    resolvedVideos = videos;
+    scheduleAfterResponse(async () => {
+      await resolving.catch((err) => console.error('[videos] thumbnail resolution failed:', err));
+    });
+  }
   timing.thumbsMs = Date.now() - t1;
 
   return { videos: resolvedVideos, hasMore, timing };
@@ -136,7 +160,7 @@ function serverTiming(state: SwrState, totalMs: number, timing: Timing): string 
     `cache;desc="${state}"`,
     `total;dur=${totalMs}`,
     `db;dur=${timing.dbMs};desc="${timing.batches} batch(es)"`,
-    `thumbs;dur=${timing.thumbsMs}`,
+    `thumbs;dur=${timing.thumbsMs}${timing.thumbsCut ? ';desc="budget"' : ''}`,
   ].join(', ');
 }
 

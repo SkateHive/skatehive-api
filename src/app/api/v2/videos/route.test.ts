@@ -17,7 +17,10 @@ function postRow(i: number) {
   };
 }
 
-async function loadRoute(executeQuery: (query: string, params: any[]) => Promise<{ rows: any[]; headers: string[] }>) {
+async function loadRoute(
+  executeQuery: (query: string, params: any[]) => Promise<{ rows: any[]; headers: string[] }>,
+  resolveThumbnailsImpl: (videos: any[]) => Promise<any[]> = async (videos) => videos,
+) {
   const exec = vi.fn(executeQuery);
   vi.doMock("@/lib/hafsql_database", () => ({
     HAFSQL_Database: class {
@@ -25,7 +28,7 @@ async function loadRoute(executeQuery: (query: string, params: any[]) => Promise
     },
   }));
   vi.doMock("@/lib/video-thumbnails", () => ({
-    resolveThumbnails: vi.fn(async (videos: any[]) => videos),
+    resolveThumbnails: vi.fn(resolveThumbnailsImpl),
   }));
   const scheduled: Array<() => Promise<void>> = [];
   vi.doMock("next/server", async (importOriginal) => {
@@ -143,6 +146,36 @@ describe("GET /api/v2/videos", () => {
     await GET(url("page=1&limit=30"));
     expect(scheduled).toHaveLength(0);
   });
+
+  it("answers within the thumbnail budget when resolution is slow, and finishes it after the response", async () => {
+    let finished = false;
+    const { GET, scheduled } = await loadRoute(
+      async (_q, params) => {
+        const offset = offsetOf(params);
+        return { rows: Array.from({ length: 90 }, (_, i) => postRow(offset + i)), headers: [] };
+      },
+      async (videos) => {
+        await new Promise((r) => setTimeout(r, 5000)); // a slow Pinata lookup
+        finished = true;
+        return videos.map((v) => ({ ...v, thumbnailUrl: "https://late.example/t.jpg" }));
+      },
+    );
+
+    const started = Date.now();
+    const res = await GET(url("page=1&limit=30"));
+    const elapsed = Date.now() - started;
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(elapsed).toBeLessThan(3000);
+    expect(body.data).toHaveLength(30);
+    expect(body.data[0].thumbnailUrl).toBe("https://images.hive.blog/DQm0/t.jpg"); // metadata thumbnail kept
+    expect(res.headers.get("server-timing")).toContain('desc="budget"');
+    expect(finished).toBe(false);
+    expect(scheduled).toHaveLength(1);
+    await scheduled[0]();
+    expect(finished).toBe(true);
+  }, 10_000);
 
   it("sends edge-cache headers with a stale-while-revalidate window", async () => {
     const { GET } = await loadRoute(async () => ({ rows: [postRow(0)], headers: [] }));
