@@ -11,18 +11,21 @@ async function loadRoute(supabase: Record<string, FakeResult[]>) {
 const req = (id: string) => new NextRequest(`https://api.test/api/spotmap/${id}`);
 
 describe("GET /api/spotmap/[id]", () => {
-  it("keeps the raw row and adds thumbnail_medium (medium > override > thumbnail)", async () => {
+  it("keeps the raw row and adds the size-bounded fields", async () => {
     const GET = await loadRoute({
-      spotmap_spots: [{ data: { id: "x", thumbnail: "https://full/x.png", thumbnail_override: "https://o/x.jpg", thumbnail_medium: null, images: ["https://g/1"] }, error: null }],
+      spotmap_spots: [{ data: { id: "x", thumbnail: "https://full/x.png", thumbnail_override: "https://o/x.jpg", thumbnail_small: "https://s/x.jpg", thumbnail_medium: null, images: ["https://g/1"] }, error: null }],
     });
     const body = await (await GET(req("x"))).json();
-    expect(body.spot).toMatchObject({ id: "x", thumbnail: "https://full/x.png", images: ["https://g/1"], thumbnail_medium: "https://o/x.jpg" });
+    expect(body.spot).toMatchObject({
+      id: "x", thumbnail: "https://full/x.png", thumbnail_override: "https://o/x.jpg", images: ["https://g/1"],
+      thumbnail_medium: null, thumbnail_bounded: "https://s/x.jpg", thumbnail_bounded_kind: "small",
+    });
   });
 
-  it("works on rows from before the medium migration", async () => {
+  it("works on rows from before the medium migration, never offering the original as bounded", async () => {
     const GET = await loadRoute({ spotmap_spots: [{ data: { id: "y", thumbnail: "https://full/y.png" }, error: null }] });
     const body = await (await GET(req("y"))).json();
-    expect(body.spot.thumbnail_medium).toBe("https://full/y.png");
+    expect(body.spot).toMatchObject({ thumbnail: "https://full/y.png", thumbnail_medium: null, thumbnail_bounded: null, thumbnail_bounded_kind: null });
   });
 
   it("404s an unknown spot", async () => {

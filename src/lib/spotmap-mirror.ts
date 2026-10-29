@@ -36,7 +36,7 @@ export type ItemStatus =
   | "reachable" // probe got an image back
   | "unreachable" // probe got a non-image or error (e.g. lh3 403)
   | "mirrored" // original pinned and medium resolved
-  | "degraded" // original lost; medium falls back to the existing small
+  | "degraded" // original lost at the source; nothing to pin or write (the API serves the existing small)
   | "failed"; // last execute attempt failed (see lastError)
 
 export interface ManifestItem {
@@ -55,6 +55,8 @@ export interface ManifestItem {
   sha256?: string;
   originalCid?: string;
   mediumUrl?: string;
+  /** Set only after the medium was fetched and its size checked. */
+  mediumCheck?: { format: string; width: number; height: number; bytes: number };
   attempts: number;
   lastError?: string;
   updatedAt: string;
@@ -300,6 +302,25 @@ export function applyProbe(item: ManifestItem, r: BoundedFetchResult, now: strin
   };
 }
 
+/**
+ * The medium must be a real image whose long side is <= maxPx; the client
+ * contract (thumbnail_bounded_kind = "medium") depends on it. Returns the
+ * measured check, or an error string.
+ */
+export function verifyMedium(
+  r: BoundedFetchResult,
+  maxPx: number
+): { ok: true; check: NonNullable<ManifestItem["mediumCheck"]> } | { ok: false; error: string } {
+  if (!r.ok) return { ok: false, error: `medium fetch ${r.status || r.error || "failed"}` };
+  if (r.truncated) return { ok: false, error: "medium larger than the byte cap" };
+  const dims = imageDimensions(r.body);
+  if (!dims.width || !dims.height) return { ok: false, error: `medium is not a readable image (${dims.format})` };
+  if (Math.max(dims.width, dims.height) > maxPx) {
+    return { ok: false, error: `medium is ${dims.width}x${dims.height}, over ${maxPx}px` };
+  }
+  return { ok: true, check: { format: dims.format, width: dims.width, height: dims.height, bytes: r.body.length } };
+}
+
 // ---------------------------------------------------------------- estimates
 
 export interface VolumeEstimate {
@@ -374,7 +395,8 @@ function sqlString(s: string): string {
 /**
  * Reviewable UPDATEs for finished items. Each one is guarded by the source it
  * was planned from, so a spot whose image changed since the plan is left
- * alone. Only the two new columns are written.
+ * alone. Only the two new columns are written, and only for items whose
+ * medium passed verifyMedium (degraded items write nothing).
  */
 export function buildApplySql(manifest: Manifest, gatewayBase: string): string {
   const lines = [
@@ -383,7 +405,7 @@ export function buildApplySql(manifest: Manifest, gatewayBase: string): string {
     "begin;",
   ];
   for (const item of Object.values(manifest.items).sort((a, b) => a.sourceUrl.localeCompare(b.sourceUrl))) {
-    if (!["mirrored", "degraded"].includes(item.status) || !item.mediumUrl || item.spotIds.length === 0) continue;
+    if (item.status !== "mirrored" || !item.mediumUrl || !item.mediumCheck || item.spotIds.length === 0) continue;
     const original = item.originalCid ? sqlString(`${gatewayBase.replace(/\/$/, "")}/ipfs/${item.originalCid}`) : "null";
     lines.push(
       `update public.spotmap_spots set thumbnail_medium = ${sqlString(item.mediumUrl)}, image_original_mirror = ${original}` +

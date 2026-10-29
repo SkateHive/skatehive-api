@@ -148,22 +148,27 @@ describe("GET /api/spotmap", () => {
     expect(res.status).toBe(500);
   });
 
-  it("adds thumbnail_medium, falling back to the full image until a medium exists", async () => {
+  it("adds size-bounded fields and leaves the legacy ones unchanged", async () => {
     const { GET } = await loadRoute({
       supabase: {
         spotmap_spots: [{
           data: [
-            spotRow({ id: "a", thumbnail_medium: "https://ipfs.skatehive.app/ipfs/bafyMed", thumbnail_small: "https://s/a" }),
-            spotRow({ id: "b", thumbnail_override: "https://o/b.jpg", thumbnail_small: "https://s/b" }),
+            spotRow({ id: "med", thumbnail_medium: "https://ipfs.skatehive.app/ipfs/bafyMed", thumbnail_small: "https://s/med" }),
+            spotRow({ id: "small", thumbnail_override: "https://o/small.jpg", thumbnail_small: "https://s/small" }),
+            spotRow({ id: "none", thumbnail: "https://mymaps.usercontent.google.com/big.png" }),
           ],
           error: null,
         }],
       },
     });
-    const body = await (await GET()).json();
-    expect(body.spots[0].thumbnail_medium).toBe("https://ipfs.skatehive.app/ipfs/bafyMed");
-    expect(body.spots[1].thumbnail_medium).toBe("https://o/b.jpg");
-    expect(body.spots[0]).not.toHaveProperty("thumbnail_override");
+    const [med, small, none] = (await (await GET()).json()).spots;
+    expect(med).toMatchObject({ thumbnail_medium: "https://ipfs.skatehive.app/ipfs/bafyMed", thumbnail_bounded: "https://ipfs.skatehive.app/ipfs/bafyMed", thumbnail_bounded_kind: "medium" });
+    expect(small).toMatchObject({ thumbnail_medium: null, thumbnail_bounded: "https://s/small", thumbnail_bounded_kind: "small", thumbnail: "https://o/small.jpg" });
+    // No bounded image: null, never the multi-MB original. Legacy fields still fall back as before.
+    expect(none).toMatchObject({ thumbnail_medium: null, thumbnail_bounded: null, thumbnail_bounded_kind: null });
+    expect(none.thumbnail).toBe("https://mymaps.usercontent.google.com/big.png");
+    expect(none.thumbnail_small).toBe("https://mymaps.usercontent.google.com/big.png");
+    expect(med).not.toHaveProperty("thumbnail_override");
   });
 
   it("retries without thumbnail_medium before the column exists (42703)", async () => {
@@ -177,8 +182,7 @@ describe("GET /api/spotmap", () => {
     });
     const res = await GET();
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.spots[0].thumbnail_medium).toBe("https://images.hive.blog/DQmAbc/photo.jpg");
+    expect((await res.json()).spots[0]).toMatchObject({ thumbnail_medium: null, thumbnail_bounded: "https://s/1", thumbnail_bounded_kind: "small" });
   });
 
   it("still returns 500 for other query errors", async () => {

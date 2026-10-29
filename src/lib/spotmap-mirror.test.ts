@@ -12,6 +12,7 @@ import {
   planHash,
   selectWork,
   summarize,
+  verifyMedium,
   type SpotImageRow,
 } from "./spotmap-mirror";
 
@@ -116,6 +117,24 @@ describe("applyProbe", () => {
   });
 });
 
+describe("verifyMedium", () => {
+  const ok = (body: Buffer) => ({ ok: true, status: 200, contentType: "image/png", body, truncated: false });
+
+  it("accepts an image whose long side is within the bound", () => {
+    expect(verifyMedium(ok(png(800, 600)), 800)).toMatchObject({ ok: true, check: { width: 800, height: 600, format: "png" } });
+  });
+
+  it("rejects an oversized image, e.g. a transcoder that clamped nothing", () => {
+    expect(verifyMedium(ok(png(2048, 1536)), 800)).toEqual({ ok: false, error: "medium is 2048x1536, over 800px" });
+  });
+
+  it("rejects truncated, failed and non-image responses", () => {
+    expect(verifyMedium({ ...ok(png(10, 10)), truncated: true }, 800).ok).toBe(false);
+    expect(verifyMedium({ ...ok(Buffer.alloc(0)), ok: false, status: 404 }, 800)).toEqual({ ok: false, error: "medium fetch 404" });
+    expect(verifyMedium(ok(Buffer.from("<html>")), 800).ok).toBe(false);
+  });
+});
+
 describe("estimateVolume", () => {
   it("extrapolates unprobed items from the probed sample", () => {
     const m = mergeInventory(emptyManifest(T), [
@@ -135,22 +154,31 @@ describe("estimateVolume", () => {
 });
 
 describe("SQL review files", () => {
+  const CHECK = { format: "jpeg", width: 800, height: 600, bytes: 90_000 };
+
   it("writes only the new columns, guarded by the planned source, with a matching rollback", () => {
     const m = mergeInventory(emptyManifest(T), rows, T);
-    m.items[MYMAPS] = { ...m.items[MYMAPS], status: "mirrored", originalCid: "bafyOrig", mediumUrl: "https://ipfs.skatehive.app/ipfs/bafyMed" };
-    m.items[LH3] = { ...m.items[LH3], status: "degraded", mediumUrl: "https://ipfs.skatehive.app/ipfs/bafkSmall3" };
+    m.items[MYMAPS] = { ...m.items[MYMAPS], status: "mirrored", originalCid: "bafyOrig", mediumUrl: "https://ipfs.skatehive.app/ipfs/bafyMed", mediumCheck: CHECK };
+    m.items[LH3] = { ...m.items[LH3], status: "degraded" };
     const apply = buildApplySql(m, "https://ipfs.skatehive.app/");
     expect(apply).toContain("set thumbnail_medium = 'https://ipfs.skatehive.app/ipfs/bafyMed', image_original_mirror = 'https://ipfs.skatehive.app/ipfs/bafyOrig'");
     expect(apply).toContain("where id in ('s1', 's2', 's6') and coalesce(nullif(thumbnail_override, ''), thumbnail) = 'https://mymaps.usercontent.google.com/hostedimage/m/*/abc?authuser=0'");
-    expect(apply).toContain("image_original_mirror = null where id in ('s3')");
+    // A dead source writes nothing: a small must never land in thumbnail_medium.
+    expect(apply).not.toContain("'s3'");
     expect(apply).not.toMatch(/set thumbnail\s*=|thumbnail_override\s*=\s*'/);
     const rollback = buildRollbackSql(m);
     expect(rollback).toContain("set thumbnail_medium = null, image_original_mirror = null where id in ('s1', 's2', 's6') and thumbnail_medium = 'https://ipfs.skatehive.app/ipfs/bafyMed'");
   });
 
+  it("skips a mirrored item whose medium was never size-checked", () => {
+    const m = mergeInventory(emptyManifest(T), rows, T);
+    m.items[MYMAPS] = { ...m.items[MYMAPS], status: "mirrored", mediumUrl: "https://ipfs.skatehive.app/ipfs/bafyMed" };
+    expect(buildApplySql(m, "https://g")).not.toContain("bafyMed");
+  });
+
   it("escapes quotes", () => {
     const m = mergeInventory(emptyManifest(T), [{ id: "o'neil", thumbnail: MYMAPS }], T);
-    m.items[MYMAPS] = { ...m.items[MYMAPS], status: "mirrored", mediumUrl: "https://x/it's" };
+    m.items[MYMAPS] = { ...m.items[MYMAPS], status: "mirrored", mediumUrl: "https://x/it's", mediumCheck: CHECK };
     expect(buildApplySql(m, "https://g")).toContain("'o''neil'");
     expect(buildApplySql(m, "https://g")).toContain("'https://x/it''s'");
   });

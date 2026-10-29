@@ -1,7 +1,7 @@
 import { NextResponse, after } from "next/server";
 import { supabaseAdmin } from "@/app/utils/supabase/supabaseClient";
 import { resolveSmallThumbnail } from "@/lib/spotmap-thumbnails";
-import { isMissingMediumColumn } from "@/lib/spotmap-medium";
+import { boundedImageFields, isMissingMediumColumn } from "@/lib/spotmap-medium";
 
 // Cap how many rows one GET can kick off generation for. The backfill script
 // is the primary way a large batch of missing thumbnails gets filled in —
@@ -77,10 +77,11 @@ export async function GET() {
     const coalescedThumbnail = thumbnail_override || rest.thumbnail;
     return {
       ...rest,
+      // Legacy fields, unchanged: may be the full-size original.
       thumbnail: coalescedThumbnail,
       thumbnail_small: thumbnail_small || coalescedThumbnail,
-      // ~800px variant for detail heroes; see src/lib/spotmap-medium.ts.
-      thumbnail_medium: thumbnail_medium || coalescedThumbnail,
+      // Size-bounded fields; see src/lib/spotmap-medium.ts.
+      ...boundedImageFields({ thumbnail_small, thumbnail_medium }),
     };
   });
 

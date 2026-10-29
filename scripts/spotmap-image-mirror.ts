@@ -46,6 +46,7 @@ import {
   selectWork,
   sha256,
   summarize,
+  verifyMedium,
   type Manifest,
   type ManifestItem,
   type SpotImageRow,
@@ -249,9 +250,10 @@ async function main() {
       const attempt = { ...item, attempts: item.attempts + 1, updatedAt: now() };
       try {
         if (item.status === "unreachable") {
-          // Original is gone at the source. Keep what exists: the small.
+          // Original is gone at the source: nothing to pin, nothing to write.
+          // The API already serves the existing small as thumbnail_bounded.
           if (!item.smallUrl) return { ...attempt, status: "failed", lastError: "source unreachable and no small thumbnail" };
-          return { ...attempt, status: "degraded", mediumUrl: item.smallUrl, lastError: undefined };
+          return { ...attempt, status: "degraded", lastError: undefined };
         }
         let bytes: Buffer | null = null;
         const cached = cacheDir && item.sha256 ? path.join(cacheDir, item.sha256) : null;
@@ -265,7 +267,13 @@ async function main() {
         const originalCid = item.originalCid || cidBySha.get(digest) || (await pinOriginal(bytes, item, jwt!));
         cidBySha.set(digest, originalCid);
         const mediumUrl = item.mediumUrl || (await requestMedium(item.sourceUrl, serviceUrl!, secret!));
-        return { ...attempt, status: "mirrored", sha256: digest, bytes: bytes.length, originalCid, mediumUrl, lastError: undefined };
+        // Don't trust maxPx: fetch the medium and measure it.
+        const check = verifyMedium(await boundedFetch(mediumUrl, { maxBytes: 3 * 1024 * 1024, timeoutMs: TIMEOUT_MS }), MEDIUM_PX);
+        if (!check.ok) {
+          // Drop the rejected medium so a retry requests a new one.
+          return { ...attempt, status: "failed", sha256: digest, bytes: bytes.length, originalCid, mediumUrl: undefined, mediumCheck: undefined, lastError: `${check.error} (${mediumUrl})` };
+        }
+        return { ...attempt, status: "mirrored", sha256: digest, bytes: bytes.length, originalCid, mediumUrl, mediumCheck: check.check, lastError: undefined };
       } catch (err: any) {
         return { ...attempt, status: "failed", lastError: String(err?.message || err) };
       }
