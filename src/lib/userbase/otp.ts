@@ -14,15 +14,20 @@ export function generateOtpCode(): string {
   return String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
 }
 
-function hashCode(email: string, code: string): string {
-  return crypto
-    .createHash("sha256")
-    .update(`${email.toLowerCase()}:${code}`)
-    .digest("hex");
+// A code requested by a partner app is bound to that app: its hash includes
+// the app id, so it only verifies when the same app presents it. That stops a
+// partner server from redeeming its users' codes as first-party (full Hive
+// powers) sessions by simply leaving its app headers off. First-party codes
+// hash exactly as before.
+function hashCode(email: string, code: string, appId?: string | null): string {
+  const input = appId
+    ? `app:${appId}:${email.toLowerCase()}:${code}`
+    : `${email.toLowerCase()}:${code}`;
+  return crypto.createHash("sha256").update(input).digest("hex");
 }
 
 /** Create + store an OTP, returning the plaintext code to email to the user. */
-export async function createOtp(email: string): Promise<string> {
+export async function createOtp(email: string, appId?: string | null): Promise<string> {
   if (!supabaseAdmin) throw new Error("Userbase backend not configured");
   const code = generateOtpCode();
   const expiresAt = new Date(
@@ -30,7 +35,7 @@ export async function createOtp(email: string): Promise<string> {
   ).toISOString();
   const { error } = await supabaseAdmin.from("userbase_email_otps").insert({
     email: email.toLowerCase(),
-    code_hash: hashCode(email, code),
+    code_hash: hashCode(email, code, appId),
     attempts: 0,
     expires_at: expiresAt,
     created_at: new Date().toISOString(),
@@ -40,7 +45,11 @@ export async function createOtp(email: string): Promise<string> {
 }
 
 /** Verify + single-use-consume the newest live OTP for an email. */
-export async function verifyOtp(email: string, code: string): Promise<boolean> {
+export async function verifyOtp(
+  email: string,
+  code: string,
+  appId?: string | null
+): Promise<boolean> {
   if (!supabaseAdmin) return false;
   const em = email.toLowerCase();
   const { data } = await supabaseAdmin
@@ -55,7 +64,7 @@ export async function verifyOtp(email: string, code: string): Promise<boolean> {
   if (new Date(row.expires_at) < new Date()) return false;
   if (row.attempts >= MAX_ATTEMPTS) return false;
 
-  if (row.code_hash !== hashCode(em, code)) {
+  if (row.code_hash !== hashCode(em, code, appId)) {
     await supabaseAdmin
       .from("userbase_email_otps")
       .update({ attempts: row.attempts + 1 })

@@ -14,7 +14,21 @@ function createTransport() {
   });
 }
 
+/**
+ * Local testing without real email: USERBASE_OTP_DEV_LOG=1 prints the code to
+ * the server console instead of sending it. Ignored in production
+ * (NODE_ENV=production or VERCEL_ENV=production), so it can't leak codes there.
+ */
+export function isOtpDevLogEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.NODE_ENV === "production" || env.VERCEL_ENV === "production") return false;
+  return env.USERBASE_OTP_DEV_LOG === "1";
+}
+
 export async function sendOtpEmail(to: string, code: string): Promise<void> {
+  if (isOtpDevLogEnabled()) {
+    console.info(`[userbase/email] DEV: OTP for ${to} is ${code} (not sent)`);
+    return;
+  }
   const from = process.env.EMAIL_USER || "noreply@skatehive.app";
   const transporter = createTransport();
   await transporter.sendMail({
