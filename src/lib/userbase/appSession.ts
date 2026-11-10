@@ -55,7 +55,7 @@ export async function issueAppSession(params: {
       p_user_agent: params.userAgent ?? null,
     });
     if (error) {
-      console.error("[userbase/appSession] app login rpc failed", error.code, error.message);
+      console.error("[userbase/appSession] app login rpc failed", errCode(error));
       if (error.code === "P0002") {
         return { ok: false, status: 403, code: "app_login_refused", error: "This account can't sign in here" };
       }
@@ -72,51 +72,79 @@ export async function issueAppSession(params: {
     }
     return { ok: true, token, expiresAt: session.expires_at || expiresAt };
   } catch (e) {
-    console.error("[userbase/appSession] app login rpc threw", e);
+    console.error("[userbase/appSession] app login rpc threw", errCode(e));
     return { ok: false, status: 503, code: "app_login_unavailable", error: "App login is unavailable, try again later" };
   }
 }
 
+// Log only a short code (SQLSTATE / PostgREST code / error class), never the
+// raw message or object: those can echo parameters such as emails.
+function errCode(e: unknown): string {
+  if (e && typeof e === "object") {
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === "string" && /^[A-Z0-9_]{1,16}$/i.test(code)) return code;
+    const name = (e as { name?: unknown }).name;
+    if (typeof name === "string" && /^[A-Za-z]{1,32}$/.test(name)) return name;
+  }
+  return "unknown";
+}
+
+export type AppSessionLookup =
+  | { status: "ok"; userId: string; expiresAt: string }
+  | { status: "invalid" } // no/malformed token, or no live session: 401
+  | { status: "unavailable" }; // DB/RPC/transport failure: 503, keep the cookie
+
 /** Bearer app token → user, for the app the caller authenticated as. */
-export async function resolveAppSession(
-  req: Request,
-  appId: string
-): Promise<{ userId: string; expiresAt: string } | null> {
-  if (!supabaseAdmin) return null;
+export async function resolveAppSession(req: Request, appId: string): Promise<AppSessionLookup> {
   const token = getBearerToken(req);
-  if (!token || !APP_TOKEN_RE.test(token)) return null;
+  if (!token || !APP_TOKEN_RE.test(token)) return { status: "invalid" };
+  if (!supabaseAdmin) return { status: "unavailable" };
   try {
     const { data, error } = await supabaseAdmin.rpc("userbase_app_session_resolve", {
       p_token_hash: hashToken(token),
       p_app: appId,
     });
     if (error) {
-      console.error("[userbase/appSession] resolve rpc failed", error.code, error.message);
-      return null;
+      console.error("[userbase/appSession] resolve rpc failed", errCode(error));
+      return { status: "unavailable" };
     }
-    const row = rows<{ user_id: string; expires_at: string }>(data)[0];
-    return row?.user_id ? { userId: row.user_id, expiresAt: row.expires_at } : null;
+    const row = rows<{ user_id?: string; expires_at?: string }>(data)[0];
+    if (!row?.user_id) return { status: "invalid" };
+    return { status: "ok", userId: row.user_id, expiresAt: row.expires_at || "" };
   } catch (e) {
-    console.error("[userbase/appSession] resolve rpc threw", e);
-    return null;
+    console.error("[userbase/appSession] resolve rpc threw", errCode(e));
+    return { status: "unavailable" };
   }
 }
 
-/** Logout: revoke the bearer app token for that app. True if one was revoked. */
-export async function revokeAppSession(req: Request, appId: string): Promise<boolean> {
-  if (!supabaseAdmin) return false;
+export type AppSessionRevoke = "revoked" | "not_found" | "unavailable";
+
+/** Logout: revoke the bearer app token for that app. */
+export async function revokeAppSession(req: Request, appId: string): Promise<AppSessionRevoke> {
   const token = getBearerToken(req);
-  if (!token || !APP_TOKEN_RE.test(token)) return false;
-  const { data, error } = await supabaseAdmin.rpc("userbase_app_session_revoke", {
-    p_token_hash: hashToken(token),
-    p_app: appId,
-  });
-  if (error) {
-    console.error("[userbase/appSession] revoke rpc failed", error.code, error.message);
-    return false;
+  if (!token || !APP_TOKEN_RE.test(token)) return "not_found";
+  if (!supabaseAdmin) return "unavailable";
+  try {
+    const { data, error } = await supabaseAdmin.rpc("userbase_app_session_revoke", {
+      p_token_hash: hashToken(token),
+      p_app: appId,
+    });
+    if (error) {
+      console.error("[userbase/appSession] revoke rpc failed", errCode(error));
+      return "unavailable";
+    }
+    return data === true ? "revoked" : "not_found";
+  } catch (e) {
+    console.error("[userbase/appSession] revoke rpc threw", errCode(e));
+    return "unavailable";
   }
-  return data === true;
 }
+
+export const APP_UNAVAILABLE_BODY = {
+  success: false,
+  error: "App login is unavailable, try again later",
+  code: "app_login_unavailable",
+} as const;
 
 /**
  * For routes that verified an email and would issue a session: either a

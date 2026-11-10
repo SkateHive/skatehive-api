@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveUserbaseUserId, getUserPublic } from "@/lib/userbase/session";
 import { authenticateAppClient, INVALID_APP_CLIENT_BODY } from "@/lib/userbase/appClient";
-import { resolveAppSession } from "@/lib/userbase/appSession";
+import { resolveAppSession, APP_UNAVAILABLE_BODY } from "@/lib/userbase/appSession";
 
 export const runtime = "nodejs";
 
@@ -21,8 +21,12 @@ export async function GET(req: NextRequest) {
   let expiresAt: string | undefined;
   if (app.kind === "app") {
     const session = await resolveAppSession(req, app.appId);
-    userId = session?.userId ?? null;
-    expiresAt = session?.expiresAt;
+    // Outage ≠ bad token: 503 tells the app to keep its cookie and retry.
+    if (session.status === "unavailable") {
+      return NextResponse.json(APP_UNAVAILABLE_BODY, { status: 503 });
+    }
+    userId = session.status === "ok" ? session.userId : null;
+    expiresAt = session.status === "ok" ? session.expiresAt : undefined;
   } else {
     userId = await resolveUserbaseUserId(req);
   }
