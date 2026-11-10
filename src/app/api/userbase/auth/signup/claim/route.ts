@@ -11,6 +11,7 @@ import { encryptHivePostingKey } from "@/lib/userbase/encryption";
 import { createSession, getUserPublic } from "@/lib/userbase/session";
 import { isRateLimited, recordAttempt, getClientIp } from "@/lib/userbase/rateLimit";
 import { supabaseAdmin } from "@/app/utils/supabase/supabaseClient";
+import { authenticateAppClient, INVALID_APP_CLIENT_BODY } from "@/lib/userbase/appClient";
 
 export const runtime = "nodejs";
 
@@ -46,6 +47,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Partner apps can't claim Hive accounts: that would route a posting key
+  // through their server. Only first-party Skatehive clients may call this.
+  const app = authenticateAppClient(req.headers);
+  if (app.kind === "invalid") {
+    return NextResponse.json(INVALID_APP_CLIENT_BODY, { status: 401 });
+  }
+  if (app.kind === "app") {
+    return NextResponse.json(
+      { success: false, error: "Not available for partner apps", code: "app_not_supported" },
+      { status: 403 }
+    );
+  }
+
   const ip = getClientIp(req);
   if (isRateLimited(`ip:${ip}`, IP_LIMIT, IP_WINDOW_MS)) {
     return fail(429, "rate_limited", "Too many attempts, try again later");
@@ -59,6 +73,10 @@ export async function POST(req: NextRequest) {
   const verified = verifySignupToken(signupToken);
   if (!verified || isSignupTokenConsumed(signupToken)) {
     return fail(401, "expired_token", "Signup session expired — request a new code", { ip });
+  }
+  // An app-bound signup token can never become a first-party session.
+  if (verified.app) {
+    return fail(401, "signup_context_mismatch", "Signup session expired — request a new code", { ip });
   }
   const email = verified.email;
 

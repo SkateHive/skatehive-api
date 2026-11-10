@@ -14,9 +14,16 @@ function secret(): string {
   return s;
 }
 
-export function signSignupToken(email: string): string {
+// `app` binds the token to the partner app whose OTP produced it (null for
+// first-party). Callers must reject a token whose app doesn't match the
+// caller's own authenticated app, in either direction.
+export function signSignupToken(email: string, app?: string | null): string {
   const payload = Buffer.from(
-    JSON.stringify({ email: email.toLowerCase(), exp: Date.now() + TTL_MINUTES * 60 * 1000 })
+    JSON.stringify({
+      email: email.toLowerCase(),
+      exp: Date.now() + TTL_MINUTES * 60 * 1000,
+      ...(app ? { app } : {}),
+    })
   ).toString("base64url");
   const sig = crypto.createHmac("sha256", secret()).update(payload).digest("base64url");
   return `${payload}.${sig}`;
@@ -53,7 +60,9 @@ export function markSignupTokenConsumed(token: string): void {
   consumedTokens.set(tokenHash(token), now + TTL_MINUTES * 60 * 1000);
 }
 
-export function verifySignupToken(token: string): { email: string } | null {
+export function verifySignupToken(
+  token: string
+): { email: string; app: string | null } | null {
   const parts = (token || "").split(".");
   if (parts.length !== 2) return null;
   const [payload, sig] = parts;
@@ -64,9 +73,9 @@ export function verifySignupToken(token: string): { email: string } | null {
     return null;
   }
   try {
-    const { email, exp } = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    const { email, exp, app } = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (!email || typeof exp !== "number" || exp < Date.now()) return null;
-    return { email };
+    return { email, app: typeof app === "string" && app ? app : null };
   } catch {
     return null;
   }

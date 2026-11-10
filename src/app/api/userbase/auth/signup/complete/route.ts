@@ -6,6 +6,13 @@ import {
 } from "@/lib/userbase/hiveAccount";
 import { createSession, getUserPublic } from "@/lib/userbase/session";
 import { supabaseAdmin } from "@/app/utils/supabase/supabaseClient";
+import {
+  authenticateAppClient,
+  appIdOf,
+  INVALID_APP_CLIENT_BODY,
+  SIGNUP_CONTEXT_MISMATCH_BODY,
+} from "@/lib/userbase/appClient";
+import { appLoginResponse } from "@/lib/userbase/appSession";
 
 export const runtime = "nodejs";
 
@@ -15,6 +22,11 @@ export async function POST(req: NextRequest) {
       { success: false, error: "Userbase backend not configured" },
       { status: 500 }
     );
+  }
+  // Partner app credentials are checked first; a bad one is refused outright.
+  const app = authenticateAppClient(req.headers);
+  if (app.kind === "invalid") {
+    return NextResponse.json(INVALID_APP_CLIENT_BODY, { status: 401 });
   }
   const body = await req.json().catch(() => null);
   const signupToken = String(body?.signupToken || "");
@@ -27,6 +39,11 @@ export async function POST(req: NextRequest) {
       { success: false, error: "Signup session expired — request a new code" },
       { status: 401 }
     );
+  }
+  // The token must be redeemed in the same context it was issued in: an app
+  // token can't be turned into a first-party session by dropping app headers.
+  if (verified.app !== appIdOf(app)) {
+    return NextResponse.json(SIGNUP_CONTEXT_MISMATCH_BODY, { status: 401 });
   }
   const email = verified.email;
 
@@ -61,6 +78,14 @@ export async function POST(req: NextRequest) {
     .limit(1);
   if (existing?.[0]) {
     const uid = existing[0].user_id;
+    if (app.kind === "app") {
+      return appLoginResponse(app, {
+        userId: uid,
+        email,
+        method: "email_otp",
+        userAgent: req.headers.get("user-agent"),
+      });
+    }
     const { token, expiresAt } = await createSession(uid, req.headers.get("user-agent"));
     return NextResponse.json({
       success: true,
@@ -124,6 +149,15 @@ export async function POST(req: NextRequest) {
       { success: false, error: "Could not link the email to the account" },
       { status: 500 }
     );
+  }
+
+  if (app.kind === "app") {
+    return appLoginResponse(app, {
+      userId,
+      email,
+      method: "email_signup",
+      userAgent: req.headers.get("user-agent"),
+    });
   }
 
   const { token, expiresAt } = await createSession(userId, req.headers.get("user-agent"));

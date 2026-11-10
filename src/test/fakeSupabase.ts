@@ -48,5 +48,16 @@ export function makeFakeSupabase(responses: Record<string, FakeResult[]>) {
     return builder;
   }
 
-  return { from, callCounts: callIndex, calls };
+  // `.rpc(name, args)` answers from responses["rpc:<name>"], same queue rules.
+  function rpc(name: string, args?: any) {
+    const key = `rpc:${name}`;
+    const i = callIndex[key] ?? 0;
+    callIndex[key] = i + 1;
+    const queue = responses[key] || [];
+    const result: FakeResult = queue[i] ?? queue[queue.length - 1] ?? { data: null, error: null };
+    calls.push({ table: key, method: "rpc", args: [args] });
+    return Promise.resolve(result);
+  }
+
+  return { from, rpc, callCounts: callIndex, calls };
 }

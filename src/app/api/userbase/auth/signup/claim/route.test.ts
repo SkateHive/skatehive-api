@@ -364,4 +364,12 @@ describe("POST /api/userbase/auth/signup/claim", () => {
     expect(twentyFirst.status).toBe(429);
     expect(json).toMatchObject({ success: false, code: "rate_limited" });
   });
+
+  it("downgrade: an app-bound signup token is refused on the first-party claim path", async () => {
+    const { POST, signSignupToken } = await loadRoute({});
+    const token = (signSignupToken as (e: string, a?: string) => string)(EMAIL, "coletivoxv");
+    const res = await POST(req({ signupToken: token, handle: HANDLE, postingKey: RIGHT_KEY.toString() }));
+    expect(res.status).toBe(401);
+    expect((await res.json()).code).toBe("signup_context_mismatch");
+  });
 });
