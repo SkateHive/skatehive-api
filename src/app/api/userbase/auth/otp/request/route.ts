@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createOtp } from "@/lib/userbase/otp";
 import { sendOtpEmail } from "@/lib/userbase/email";
+import { brandForApp } from "@/lib/userbase/otpEmailTemplate";
 import { supabaseAdmin } from "@/app/utils/supabase/supabaseClient";
 import {
   authenticateAppClient,
@@ -68,7 +69,8 @@ export async function POST(req: NextRequest) {
 
   try {
     const code = await createOtp(email, appIdOf(app));
-    await sendOtpEmail(email, code);
+    // Brand comes only from the authenticated app, never from the body/Origin.
+    await sendOtpEmail(email, code, brandForApp(app));
   } catch (e) {
     console.error("[userbase/auth/otp/request] failed", e);
     return NextResponse.json(

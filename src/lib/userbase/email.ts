@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { buildOtpEmail, type EmailBrand } from "@/lib/userbase/otpEmailTemplate";
 
 // SMTP transport — same env vars as the web app (SMTP_HOST/PORT/SECURE,
 // EMAIL_USER, EMAIL_PASS), defaults to Gmail SMTP.
@@ -24,22 +25,24 @@ export function isOtpDevLogEnabled(env: NodeJS.ProcessEnv = process.env): boolea
   return env.USERBASE_OTP_DEV_LOG === "1";
 }
 
-export async function sendOtpEmail(to: string, code: string): Promise<void> {
+export async function sendOtpEmail(
+  to: string,
+  code: string,
+  brand: EmailBrand = "skatehive"
+): Promise<void> {
+  const email = buildOtpEmail(brand, code);
   if (isOtpDevLogEnabled()) {
-    console.info(`[userbase/email] DEV: OTP for ${to} is ${code} (not sent)`);
+    console.info(`[userbase/email] DEV: ${brand} OTP for ${to} is ${code} (not sent)`);
     return;
   }
-  const from = process.env.EMAIL_USER || "noreply@skatehive.app";
+  // Same authorized SMTP address for every brand; only the display name changes.
+  const address = process.env.EMAIL_USER || "noreply@skatehive.app";
   const transporter = createTransport();
   await transporter.sendMail({
-    from,
+    from: { name: email.fromName, address },
     to,
-    subject: "Your SkateHive login code",
-    text: `Your SkateHive login code is ${code}. It expires in 10 minutes. If you didn't request this, ignore this email.`,
-    html: `<div style="font-family:system-ui,sans-serif">
-      <p>Your SkateHive login code is:</p>
-      <p style="font-size:32px;font-weight:700;letter-spacing:6px;color:#000">${code}</p>
-      <p style="color:#666">It expires in 10 minutes. If you didn't request this, ignore this email.</p>
-    </div>`,
+    subject: email.subject,
+    text: email.text,
+    html: email.html,
   });
 }
