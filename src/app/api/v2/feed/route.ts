@@ -46,7 +46,7 @@ async function fetchTotal(
       (
         (
           c.parent_author = 'peak.snaps'
-          AND c.parent_permlink SIMILAR TO 'snap-container-%'
+          AND c.parent_permlink LIKE 'snap-container-%'
           AND c.json_metadata @> @tag_filter
         )
         OR c.parent_permlink = @parent_permlink
@@ -73,76 +73,95 @@ async function fetchFeedData(
   author?: string
 ): Promise<FeedData> {
   const tagFilter = `{"tags": ["${community}"]}`;
-  const total = await fetchTotal(hafDb, community, parentPermlink, author);
 
   const mainLabel = `HAFSQL Main Query [${Date.now()}]`;
-  console.time(mainLabel);
+  // Two phases. The old query joined every vote of EVERY snap in the community
+  // and grouped by ~30 columns before LIMIT, which grew with the community
+  // (~50s and a 500 at ~5.7k snaps). Now the page is picked first from
+  // comments alone, and votes / reply count / account are looked up only for
+  // the rows on that page. Same columns and aliases as before.
   const query = `
+    WITH page AS (
+      SELECT
+        c.body, c.author, c.permlink, c.parent_author, c.parent_permlink,
+        c.created, c.last_edited, c.cashout_time, c.remaining_till_cashout, c.last_payout,
+        c.tags, c.category, c.json_metadata, c.root_author, c.root_permlink,
+        c.pending_payout_value, c.author_rewards, c.author_rewards_in_hive, c.total_payout_value,
+        c.curator_payout_value, c.beneficiary_payout_value, c.total_rshares, c.net_rshares, c.total_vote_weight,
+        c.beneficiaries, c.max_accepted_payout, c.percent_hbd, c.allow_votes, c.allow_curation_rewards, c.deleted
+      FROM comments c
+      WHERE
+        (
+          (
+            c.parent_author = 'peak.snaps'
+            AND c.parent_permlink LIKE 'snap-container-%'
+            AND c.json_metadata @> @tag_filter
+          )
+          OR c.parent_permlink = @parent_permlink
+        )
+        ${author ? 'AND c.author = @author' : ''}
+        AND c.deleted = false
+      ORDER BY c.created DESC
+      LIMIT @limit
+      OFFSET @offset
+    )
     SELECT
-      c.body, c.author, c.permlink, c.parent_author, c.parent_permlink,
-      c.created, c.last_edited, c.cashout_time, c.remaining_till_cashout, c.last_payout,
-      c.tags, c.category, c.json_metadata AS post_json_metadata, c.root_author, c.root_permlink,
-      c.pending_payout_value, c.author_rewards, c.author_rewards_in_hive, c.total_payout_value,
-      c.curator_payout_value, c.beneficiary_payout_value, c.total_rshares, c.net_rshares, c.total_vote_weight,
-      c.beneficiaries, c.max_accepted_payout, c.percent_hbd, c.allow_votes, c.allow_curation_rewards, c.deleted,
+      p.body, p.author, p.permlink, p.parent_author, p.parent_permlink,
+      p.created, p.last_edited, p.cashout_time, p.remaining_till_cashout, p.last_payout,
+      p.tags, p.category, p.json_metadata AS post_json_metadata, p.root_author, p.root_permlink,
+      p.pending_payout_value, p.author_rewards, p.author_rewards_in_hive, p.total_payout_value,
+      p.curator_payout_value, p.beneficiary_payout_value, p.total_rshares, p.net_rshares, p.total_vote_weight,
+      p.beneficiaries, p.max_accepted_payout, p.percent_hbd, p.allow_votes, p.allow_curation_rewards, p.deleted,
       (
         SELECT COUNT(*)
         FROM comments ch
-        WHERE ch.parent_author = c.author
-          AND ch.parent_permlink = c.permlink
+        WHERE ch.parent_author = p.author
+          AND ch.parent_permlink = p.permlink
           AND ch.deleted = false
       ) AS children,
       a.json_metadata AS user_json_metadata, a.reputation, a.followers, a.followings,
-      COALESCE(
-        json_agg(
-          json_build_object(
-            'id', v.id,
-            'timestamp', v.timestamp,
-            'voter', v.voter,
-            'weight', v.weight,
-            'rshares', v.rshares,
-            'total_vote_weight', v.total_vote_weight,
-            'pending_payout', v.pending_payout,
-            'pending_payout_symbol', v.pending_payout_symbol
-          )
-        ) FILTER (WHERE v.id IS NOT NULL), 
-        '[]'
-      ) AS votes
-    FROM comments c
-    LEFT JOIN accounts a ON c.author = a.name
-    LEFT JOIN operation_effective_comment_vote_view v 
-      ON c.author = v.author 
-      AND c.permlink = v.permlink
-    WHERE 
       (
-        (
-          c.parent_author = 'peak.snaps'
-          AND c.parent_permlink SIMILAR TO 'snap-container-%'
-          AND c.json_metadata @> @tag_filter
+        SELECT COALESCE(
+          json_agg(
+            json_build_object(
+              'id', v.id,
+              'timestamp', v.timestamp,
+              'voter', v.voter,
+              'weight', v.weight,
+              'rshares', v.rshares,
+              'total_vote_weight', v.total_vote_weight,
+              'pending_payout', v.pending_payout,
+              'pending_payout_symbol', v.pending_payout_symbol
+            )
+          ),
+          '[]'
         )
-        OR c.parent_permlink = @parent_permlink
-      )
-      ${author ? 'AND c.author = @author' : ''}
-      AND c.deleted = false
-    GROUP BY 
-      c.body, c.author, c.permlink, c.parent_author, c.parent_permlink, c.created, c.last_edited, c.cashout_time, 
-      c.remaining_till_cashout, c.last_payout, c.tags, c.category, c.json_metadata, c.root_author, c.root_permlink, 
-      c.pending_payout_value, c.author_rewards, c.author_rewards_in_hive, c.total_payout_value, c.curator_payout_value, 
-      c.beneficiary_payout_value, c.total_rshares, c.net_rshares, c.total_vote_weight, c.beneficiaries, c.max_accepted_payout, 
-      c.percent_hbd, c.allow_votes, c.allow_curation_rewards, c.deleted, a.json_metadata, a.reputation, a.followers, a.followings
-    ORDER BY c.created DESC
-    LIMIT @limit
-    OFFSET @offset;
+        FROM operation_effective_comment_vote_view v
+        WHERE v.author = p.author AND v.permlink = p.permlink
+      ) AS votes
+    FROM page p
+    LEFT JOIN accounts a ON a.name = p.author
+    ORDER BY p.created DESC;
   `;
 
-  const hafRows = await hafDb.executeQuery(query, [
-    { name: 'tag_filter', value: tagFilter },
-    { name: 'parent_permlink', value: parentPermlink },
-    { name: 'limit', value: limit },
-    { name: 'offset', value: offset },
-    ...(author ? [{ name: 'author', value: author }] : []),
+  // The total and the page are independent: run them at the same time.
+  const [total, hafRows] = await Promise.all([
+    fetchTotal(hafDb, community, parentPermlink, author),
+    (async () => {
+      console.time(mainLabel);
+      try {
+        return await hafDb.executeQuery(query, [
+          { name: 'tag_filter', value: tagFilter },
+          { name: 'parent_permlink', value: parentPermlink },
+          { name: 'limit', value: limit },
+          { name: 'offset', value: offset },
+          ...(author ? [{ name: 'author', value: author }] : []),
+        ]);
+      } finally {
+        console.timeEnd(mainLabel);
+      }
+    })(),
   ]);
-  console.timeEnd(mainLabel);
 
   const rows = hafRows.rows.map(row => normalizePost(row, 'haf'));
   const dealiasedRows = await dealiasSoftPosts(rows);
