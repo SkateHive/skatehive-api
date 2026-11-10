@@ -56,6 +56,11 @@ list). Statuses: `pending → approved → publishing → published`, or `reject
 or `failed` (retry via `/publish`, except `signer_changed` /
 `destination_conflict`).
 
+**Withdrawn posts.** A post the author withdraws is moved by an audited owner
+action from `approved` to `failed` with `last_error_code=withdrawn_by_author`
+(the 0038 guard allows it; an event is logged). `/publish` refuses such a post
+with `409 withdrawn` before any requeue, and resume/cron never pick `failed`.
+
 **Cursor.** Opaque base64url of `(timestamp, id)`, ordered
 `(ts desc, id desc)`: `created_at` for mine/queue, `published_at` for the feed.
 `limit` 1..50, default 20.

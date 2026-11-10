@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { WITHDRAWN_ERROR_CODE } from "@/lib/coletivo/config";
 import { err, isUuid, json, requireSessionHash, storeErrorResponse } from "@/lib/coletivo/http";
 import { runPublishFlow } from "@/lib/coletivo/service";
 import { getPost, me, requeuePublish, StoreError } from "@/lib/coletivo/store";
@@ -17,6 +18,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   try {
     if (!(await me(s.tokenHash)).moderator_handle) return err(403, "forbidden");
     const current = await getPost(s.tokenHash, id);
+    // A withdrawn post stays out of the queue for good: refuse BEFORE any
+    // requeue or publish attempt, whatever its status.
+    if (current.last_error_code === WITHDRAWN_ERROR_CODE) return err(409, "withdrawn");
     if (current.status === "failed") await requeuePublish(s.tokenHash, id);
     else if (current.status !== "approved" && current.status !== "publishing") throw new StoreError(409, "conflict");
     const outcome = await runPublishFlow(id);
