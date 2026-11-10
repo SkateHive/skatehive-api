@@ -21,6 +21,7 @@ function makeStore(post: Partial<PostForPublish> = {}, status = "approved", atte
       ...post,
     } as PostForPublish,
     signerKind: null as string | null,
+    legacyDetail: null as string | null,
   };
   const store: PublishStore = {
     async claim() {
@@ -47,6 +48,11 @@ function makeStore(post: Partial<PostForPublish> = {}, status = "approved", atte
       if (t !== state.claimToken || !state.post.publish_author) return false;
       Object.assign(state, { status: "published", claimToken: null });
       return true;
+    },
+    async markLegacy(_id, t, detail) {
+      if (t !== state.claimToken || !state.post.publish_author || state.post.publish_parent_author) return "lost";
+      Object.assign(state, { status: "failed", lastError: "legacy_target_unknown", legacyDetail: detail, claimToken: null });
+      return "failed";
     },
     async fail(_id, t, code, retryable) {
       if (t !== state.claimToken) return "lost";
@@ -172,22 +178,33 @@ describe("publishPost as a SNAP (never a blog)", () => {
     expect(state.status).toBe("published");
   });
 
-  it("legacy APPROVED post reserved without a parent, not on chain -> failed legacy_target_unknown, never migrated blindly", async () => {
+  it("legacy APPROVED post reserved without a parent, not on chain -> mark_legacy 'not on chain', no broadcast, never complete", async () => {
     const { store, state } = makeStore({ publish_author: "skateuser" });
+    const complete = vi.spyOn(store, "complete");
     const d = deps(store);
     expect(await publishPost(POST_ID, d)).toEqual({ status: "failed", code: "legacy_target_unknown" });
     expect(d.resolveSnapContainer).not.toHaveBeenCalled();
     expect(d.broadcast).not.toHaveBeenCalled();
-    expect(state.status).toBe("failed");
+    expect(complete).not.toHaveBeenCalled();
+    expect(state).toMatchObject({ status: "failed", lastError: "legacy_target_unknown", legacyDetail: "not on chain" });
   });
 
-  it("legacy reserved without a parent and ALREADY on chain as root -> still fail closed, no chain call, no broadcast", async () => {
+  it("legacy reserved without a parent and its ROOT found on chain -> mark_legacy with that detail, NEVER complete/broadcast", async () => {
     const { store, state } = makeStore({ publish_author: "skateuser" });
+    const complete = vi.spyOn(store, "complete");
     const d = deps(store, { getChainPost: vi.fn(async () => onChain({ parentAuthor: "", parentPermlink: "hive-173115" })) });
     expect(await publishPost(POST_ID, d)).toEqual({ status: "failed", code: "legacy_target_unknown" });
-    expect(d.getChainPost).not.toHaveBeenCalled();
     expect(d.broadcast).not.toHaveBeenCalled();
-    expect(state.status).toBe("failed");
+    expect(complete).not.toHaveBeenCalled();
+    expect(state.legacyDetail).toBe(`root on chain: skateuser/${PERMLINK}`);
+  });
+
+  it("legacy with chain down -> still mark_legacy (detail 'chain unavailable'), no broadcast", async () => {
+    const { store, state } = makeStore({ publish_author: "skateuser" });
+    const d = deps(store, { getChainPost: vi.fn(async () => { throw new Error("rpc"); }) });
+    expect(await publishPost(POST_ID, d)).toEqual({ status: "failed", code: "legacy_target_unknown" });
+    expect(d.broadcast).not.toHaveBeenCalled();
+    expect(state.legacyDetail).toBe("chain unavailable");
   });
 
   it("unreserved post ALREADY on chain under exactly the current target -> reserve target + published (reconciled), NO broadcast", async () => {

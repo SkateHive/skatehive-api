@@ -279,6 +279,21 @@ export const publishStore: PublishStore = {
       throw e;
     }
   },
+  async markLegacy(postId, claimToken, detail) {
+    try {
+      const r = one<DbPost>(
+        await call("userbase_app_post_publish_mark_legacy", {
+          p_post_id: postId,
+          p_claim_token: claimToken,
+          p_detail: detail.slice(0, 400),
+        })
+      );
+      return r.status === "failed" ? "failed" : "lost";
+    } catch (e) {
+      if (e instanceof StoreError && e.status === 409) return "lost";
+      throw e;
+    }
+  },
   async complete(postId, claimToken) {
     try {
       await call("userbase_app_post_publish_complete", {

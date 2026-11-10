@@ -16,9 +16,10 @@ import type { MediaItem, ContextRef } from "./validation";
 //    permlink, parent author, parent permlink AND json_metadata submission_id
 //    all match; anything else there is a conflict, never "published";
 //  - a reserved post without a saved parent (reserved by the old root-post
-//    flow) is never published blindly and never marked published (0041's
-//    guard forbids published without a parent): failed for a human with
-//    legacy_target_unknown, the same code the DB uses;
+//    flow) is never broadcast and never marked published by the worker:
+//    userbase_app_post_publish_mark_legacy persists failed
+//    legacy_target_unknown with a read-only chain detail for a human (only the
+//    owner's audited reconcile_legacy_root can publish it);
 //  - a different signer/target fails closed in the DB (target_changed).
 
 export const SNAP_PARENT_AUTHOR = "peak.snaps";
@@ -77,6 +78,12 @@ export type PublishStore = {
   complete(postId: string, claimToken: string): Promise<boolean>;
   /** Report a failure; the DB decides approved (retry) vs failed (cap/terminal). */
   fail(postId: string, claimToken: string, errorCode: string, retryable: boolean): Promise<"approved" | "failed" | "lost">;
+  /**
+   * Legacy reservation (author set, no parent): persist failed
+   * legacy_target_unknown with a detail for the human reviewer
+   * (userbase_app_post_publish_mark_legacy). Never publishes.
+   */
+  markLegacy(postId: string, claimToken: string, detail: string): Promise<"failed" | "lost">;
 };
 
 export type PublishDeps = {
@@ -206,6 +213,19 @@ async function landedAt(
   return ours ? "ours" : "conflict";
 }
 
+/** Read-only description of a legacy destination, for the human reviewer. */
+async function legacyDetail(deps: PublishDeps, postId: string, author: string, permlink: string): Promise<string> {
+  try {
+    const c = await deps.getChainPost(author, permlink);
+    if (!c) return "not on chain";
+    const sameSubmission = c.submissionId === postId;
+    if (sameSubmission && c.parentAuthor === "") return `root on chain: ${author}/${permlink}`;
+    return `other content on chain: ${author}/${permlink} (parent ${c.parentAuthor ?? "?"}/${c.parentPermlink ?? "?"}, ${sameSubmission ? "same" : "other"} submission)`;
+  } catch {
+    return "chain unavailable";
+  }
+}
+
 /** Publish `requestedId`, or the next due approved/stale post when null. */
 export async function publishPost(requestedId: string | null, deps: PublishDeps): Promise<PublishOutcome> {
   if (!deps.enabled) return { status: "disabled" };
@@ -232,9 +252,13 @@ export async function publishPost(requestedId: string | null, deps: PublishDeps)
       : null;
 
   // 1) Already reserved. Without a valid saved snap parent it came from the old
-  //    root-post flow: fail closed for a human, no chain call, no broadcast.
+  //    root-post flow: hand it to a human, never broadcast, never complete.
   if (post.publish_author) {
-    if (!isValidSnapTarget(saved)) return report("legacy_target_unknown", false);
+    if (!isValidSnapTarget(saved)) {
+      const detail = await legacyDetail(deps, postId, post.publish_author, permlink);
+      const r = await deps.store.markLegacy(postId, claimToken, detail);
+      return r === "lost" ? { status: "busy" } : { status: "failed", code: "legacy_target_unknown" };
+    }
     let state: Landed;
     try {
       state = await landedAt(deps, postId, post.publish_author, permlink, saved);
