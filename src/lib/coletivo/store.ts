@@ -221,6 +221,8 @@ export const requeuePublish = async (tokenHash: string, postId: string) =>
 
 type DbPost = PostRow & {
   user_id: string;
+  publish_parent_author?: string | null;
+  publish_parent_permlink?: string | null;
   publish_claim_token: string | null;
   publish_signer_kind: "own_key" | "shared_default" | null;
   crosspost_queue_id: string | null;
@@ -236,6 +238,8 @@ function toPublishPost(r: DbPost): PostForPublish {
     context: r.context_kind && r.context_slug ? { kind: r.context_kind, slug: r.context_slug } : null,
     publish_author: r.publish_author,
     publish_permlink: r.publish_permlink || "",
+    publish_parent_author: r.publish_parent_author ?? null,
+    publish_parent_permlink: r.publish_parent_permlink ?? null,
   };
 }
 
@@ -252,17 +256,23 @@ export const publishStore: PublishStore = {
     if (!r || !r.publish_claim_token || !r.publish_permlink) return null;
     return { claimToken: r.publish_claim_token, post: toPublishPost(r) };
   },
-  async reserve(postId, claimToken, author, signerKind) {
+  async reserve(postId, claimToken, target) {
     try {
+      // 0041: reserves author + signer + snap parent atomically; on any change
+      // the DB fails the post with target_changed (never republished elsewhere).
       const r = one<DbPost>(
-        await call("userbase_app_post_publish_reserve", {
+        await call("userbase_app_post_publish_reserve_target", {
           p_post_id: postId,
           p_claim_token: claimToken,
-          p_author: author,
-          p_signer_kind: signerKind,
+          p_author: target.author,
+          p_signer_kind: target.signerKind,
+          p_parent_author: target.parentAuthor,
+          p_parent_permlink: target.parentPermlink,
         })
       );
-      if (r.status === "failed" && r.last_error_code === "signer_changed") return "signer_changed";
+      if (r.status === "failed" && (r.last_error_code === "target_changed" || r.last_error_code === "legacy_target_unknown")) {
+        return r.last_error_code;
+      }
       return r.status === "publishing" ? "ok" : "lost";
     } catch (e) {
       if (e instanceof StoreError && e.status === 409) return "lost";

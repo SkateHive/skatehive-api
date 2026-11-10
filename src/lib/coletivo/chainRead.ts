@@ -30,7 +30,13 @@ export async function readChainPost(call: ContentCall, author: string, permlink:
     if (isProvenMissingPost(e, author, permlink)) return null;
     throw e;
   }
-  const c = raw as { author?: unknown; permlink?: unknown; json_metadata?: unknown } | null;
+  const c = raw as {
+    author?: unknown;
+    permlink?: unknown;
+    parent_author?: unknown;
+    parent_permlink?: unknown;
+    json_metadata?: unknown;
+  } | null;
   // Older nodes return an empty object for a missing post.
   if (!c || typeof c.author !== "string" || !c.author) return null;
   let submissionId: string | null = null;
@@ -41,5 +47,11 @@ export async function readChainPost(call: ContentCall, author: string, permlink:
   } catch {
     submissionId = null;
   }
-  return { author: c.author, permlink: typeof c.permlink === "string" ? c.permlink : "", submissionId };
+  return {
+    author: c.author,
+    permlink: typeof c.permlink === "string" ? c.permlink : "",
+    parentAuthor: typeof c.parent_author === "string" ? c.parent_author : "",
+    parentPermlink: typeof c.parent_permlink === "string" ? c.parent_permlink : "",
+    submissionId,
+  };
 }

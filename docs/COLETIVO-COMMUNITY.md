@@ -67,6 +67,20 @@ with `409 withdrawn` before any requeue, and resume/cron never pick `failed`.
 
 ## Publishing
 
+Posts are published as Skatehive **snaps**: a reply to the current
+`@peak.snaps` container (latest root `snap-container-*`, resolved like the web
+and mobile composers), `title: ""` (the original title opens the body), tags
+`hive-173115`, `snaps`, `coletivoxv`. The target (author, signer kind, parent
+author, parent permlink) is reserved in the DB by
+`userbase_app_post_publish_reserve_target` (migration 0041) before any
+broadcast and never changes; retries and reconciliation use only the saved
+parent. A post at the destination counts as ours only if author, permlink,
+parent and `json_metadata.coletivoxv.submission_id` all match. No container ->
+no broadcast (`snap_container_unavailable`, retryable). A reservation from the
+old root-post flow without a saved parent is never published blindly
+(`legacy_target_unknown`). Rollout order: 0041 first, then this API, flag last.
+
+
 Approval starts publishing right after the response (`after()`); the UI polls
 `GET /submissions/:id`. The post is signed as the author (their stored key, or
 the shared `DEFAULT_HIVE_POSTING_ACCOUNT`, with attribution in
