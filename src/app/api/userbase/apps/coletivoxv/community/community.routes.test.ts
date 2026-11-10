@@ -203,6 +203,19 @@ describe("moderation", () => {
     expect(service.resumeColetivo).toHaveBeenCalledWith({ maxPublishes: 5, deadlineMs: 20000 });
   });
 
+  it("withdrawn post: 409 withdrawn, never requeued nor published", async () => {
+    store.me.mockResolvedValue({ user_id: "u", moderator_handle: "xvlad" });
+    const { POST } = await import("./submissions/[id]/publish/route");
+    for (const status of ["failed", "approved"]) {
+      store.getPost.mockResolvedValueOnce(row({ status, last_error_code: "withdrawn_by_author" }));
+      const res = await POST(req(`/submissions/${POST_ID}/publish`, { method: "POST" }), params(POST_ID));
+      expect(res.status).toBe(409);
+      expect((await res.json()).code).toBe("withdrawn");
+    }
+    expect(store.requeuePublish).not.toHaveBeenCalled();
+    expect(service.runPublishFlow).not.toHaveBeenCalled();
+  });
+
   it("publish retry of a failed post requeues then runs; published -> 409", async () => {
     store.me.mockResolvedValue({ user_id: "u", moderator_handle: "xvlad" });
     const { POST } = await import("./submissions/[id]/publish/route");

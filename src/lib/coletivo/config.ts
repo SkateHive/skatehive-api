@@ -26,6 +26,13 @@ export const LIMITS = {
   publishMaxAttempts: 5,
 } as const;
 
+/**
+ * last_error_code of a post the author withdrew (set by an audited owner
+ * action, see docs/COLETIVO-COMMUNITY.md). Such a post must never be requeued
+ * or published, even by a moderator "try again".
+ */
+export const WITHDRAWN_ERROR_CODE = "withdrawn_by_author";
+
 /** Real Hive broadcasts only when explicitly enabled (never in tests/local). */
 export function isPublishEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.COLETIVO_HIVE_PUBLISH_ENABLED === "1";
