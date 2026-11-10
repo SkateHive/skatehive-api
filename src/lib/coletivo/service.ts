@@ -6,6 +6,7 @@ import { CROSSPOST_QUEUE_TABLE, enqueueCrossPost, type InstagramQueuePayload } f
 import { enqueueCrosspostOnce } from "./crosspostOnce";
 import { buildInstagramCaption } from "@/lib/instagram/caption";
 import { COLETIVO_APP_ID, isPublishEnabled } from "./config";
+import { readChainPost } from "./chainRead";
 import { publishPost, type ChainPost, type PublishOutcome } from "./publisher";
 import { drainOutbox, type DrainResult, type OutboxItem } from "./sideEffects";
 import { claimOutbox, completeOutbox, linkCrosspost, publishStore } from "./store";
@@ -14,21 +15,8 @@ import { claimOutbox, completeOutbox, linkCrosspost, publishStore } from "./stor
 // runs a chain write unless COLETIVO_HIVE_PUBLISH_ENABLED=1.
 
 export async function getChainPost(author: string, permlink: string): Promise<ChainPost> {
-  const c = (await HiveClient.database.call("get_content", [author, permlink])) as {
-    author?: string;
-    permlink?: string;
-    json_metadata?: string;
-  } | null;
-  if (!c || !c.author) return null;
-  let submissionId: string | null = null;
-  try {
-    const meta = JSON.parse(c.json_metadata || "{}");
-    const id = meta?.[COLETIVO_APP_ID]?.submission_id;
-    submissionId = typeof id === "string" ? id : null;
-  } catch {
-    submissionId = null;
-  }
-  return { author: c.author, permlink: c.permlink || "", submissionId };
+  // A proven "does not exist" is absent; any other failure is rethrown (see chainRead.ts).
+  return readChainPost((a, p) => HiveClient.database.call("get_content", [a, p]), author, permlink);
 }
 
 export function permalinkUrl(author: string, permlink: string): string {
