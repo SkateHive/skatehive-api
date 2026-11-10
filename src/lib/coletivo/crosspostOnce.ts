@@ -1,10 +1,18 @@
-// At most one Instagram curation request per published Coletivo post, ever.
-// The queue's unique index only covers ACTIVE rows, so after a curator rejects
-// (or publishing fails) a blind replay could open a new request. Before
-// enqueueing we therefore look for ANY row for target+author+permlink, in any
-// status, and reuse it. Combined with the post's own crosspost_queue_id link and
-// the outbox's single claim per post, a crash between enqueue and link can only
-// re-link the same row, never reopen the request.
+// Idempotent Instagram curation request for a published Coletivo post.
+//
+// How: before enqueueing, look up ANY queue row for target+author+permlink (in
+// any status) and reuse it; otherwise enqueue, where the queue's unique index on
+// ACTIVE rows rejects a concurrent duplicate (enqueueCrossPost then returns the
+// existing row). The post keeps the id in crosspost_queue_id, and the outbox
+// holds one claim per (post, kind) at a time.
+//
+// This covers the normal crash/retry cases (crash between enqueue and link,
+// timeout that actually landed, replay after a curator rejected).
+// Residual, documented: it is NOT a single-transaction guarantee. Two workers
+// that both see "no row" at the same moment, where the first row is then
+// moved to rejected/failed before the second insert, could still produce a
+// second request. An atomic SQL service (lookup + insert + link in one
+// transaction) would close that window.
 
 export type CrosspostLookup = (target: "instagram", author: string, permlink: string) => Promise<{ id: string; status: string } | null>;
 
