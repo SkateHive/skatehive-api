@@ -16,8 +16,9 @@ import type { MediaItem, ContextRef } from "./validation";
 //    permlink, parent author, parent permlink AND json_metadata submission_id
 //    all match; anything else there is a conflict, never "published";
 //  - a reserved post without a saved parent (reserved by the old root-post
-//    flow) is never published blindly: reconciled if already on chain,
-//    otherwise failed for a human (legacy_target_unknown, same code as the DB);
+//    flow) is never published blindly and never marked published (0041's
+//    guard forbids published without a parent): failed for a human with
+//    legacy_target_unknown, the same code the DB uses;
 //  - a different signer/target fails closed in the DB (target_changed).
 
 export const SNAP_PARENT_AUTHOR = "peak.snaps";
@@ -55,8 +56,9 @@ export type HiveComment = {
 export type ChainPost = {
   author: string;
   permlink: string;
-  parentAuthor: string;
-  parentPermlink: string;
+  /** null when the node did not return the field: never treated as "root". */
+  parentAuthor: string | null;
+  parentPermlink: string | null;
   submissionId: string | null;
 } | null;
 
@@ -180,22 +182,28 @@ function errCode(e: unknown): string {
 
 type Landed = "ours" | "absent" | "conflict";
 
+/**
+ * Ours only if author, permlink, submission_id AND the expected parent all
+ * match; missing parent fields never match. Anything else there is a conflict.
+ */
 async function landedAt(
   deps: PublishDeps,
   postId: string,
   author: string,
   permlink: string,
-  target: SnapTarget | null
+  expected: SnapTarget
 ): Promise<Landed> {
   const c = await deps.getChainPost(author, permlink);
   if (!c) return "absent";
-  const same = c.author === author && c.permlink === permlink && c.submissionId === postId;
-  if (!same) return "conflict";
-  // target null = legacy reservation without a saved parent: identity only.
-  if (target && (c.parentAuthor !== target.parentAuthor || c.parentPermlink !== target.parentPermlink)) {
-    return "conflict";
-  }
-  return "ours";
+  const ours =
+    c.author === author &&
+    c.permlink === permlink &&
+    c.submissionId === postId &&
+    typeof c.parentAuthor === "string" &&
+    typeof c.parentPermlink === "string" &&
+    c.parentAuthor === expected.parentAuthor &&
+    c.parentPermlink === expected.parentPermlink;
+  return ours ? "ours" : "conflict";
 }
 
 /** Publish `requestedId`, or the next due approved/stale post when null. */
@@ -223,8 +231,10 @@ export async function publishPost(requestedId: string | null, deps: PublishDeps)
       ? { parentAuthor: post.publish_parent_author || "", parentPermlink: post.publish_parent_permlink || "" }
       : null;
 
-  // 1) Already reserved: reconcile against the SAVED target first.
+  // 1) Already reserved. Without a valid saved snap parent it came from the old
+  //    root-post flow: fail closed for a human, no chain call, no broadcast.
   if (post.publish_author) {
+    if (!isValidSnapTarget(saved)) return report("legacy_target_unknown", false);
     let state: Landed;
     try {
       state = await landedAt(deps, postId, post.publish_author, permlink, saved);
@@ -233,9 +243,6 @@ export async function publishPost(requestedId: string | null, deps: PublishDeps)
     }
     if (state === "ours") return finish(post.publish_author, true);
     if (state === "conflict") return report("destination_conflict", false);
-    // Not on chain. A reservation without a valid saved snap parent came from
-    // the old root-post flow: never publish it blindly.
-    if (!isValidSnapTarget(saved)) return report("legacy_target_unknown", false);
   } else if (saved) {
     // A parent without an author should not exist; fail closed.
     return report("legacy_target_unknown", false);
@@ -261,14 +268,17 @@ export async function publishPost(requestedId: string | null, deps: PublishDeps)
     }
     if (!isValidSnapTarget(container)) return report("snap_container_unavailable", true);
     target = container;
-    try {
-      if ((await landedAt(deps, postId, signer.author, permlink, target)) === "conflict") {
-        return report("destination_conflict", false);
-      }
-    } catch {
-      return report("chain_unavailable", true);
-    }
   }
+
+  // Look at the destination before reserving/broadcasting (first attempt and
+  // retries alike): never broadcast onto something already there.
+  let pre: Landed;
+  try {
+    pre = await landedAt(deps, postId, signer.author, permlink, target);
+  } catch {
+    return report("chain_unavailable", true);
+  }
+  if (pre === "conflict") return report("destination_conflict", false);
 
   // 3) Reserve (first time) or re-confirm (retry) the full target in the DB.
   const reserved = await deps.store.reserve(postId, claimToken, {
@@ -280,6 +290,8 @@ export async function publishPost(requestedId: string | null, deps: PublishDeps)
   if (reserved === "target_changed" || reserved === "legacy_target_unknown") {
     return { status: "failed", code: reserved };
   }
+  // Already on chain under exactly this target: record it, do not re-broadcast.
+  if (pre === "ours") return finish(signer.author, true);
 
   const comment = buildComment(post, target, permlink, {
     safeUser: signer.usingDefault ? deps.safeUserId(post.user_id) : null,

@@ -49,6 +49,11 @@ describe("readChainPost", () => {
     expect(await readChainPost(async () => ({ ...existingPost, json_metadata: "{}" }), AUTHOR, PERMLINK)).toMatchObject({ submissionId: null });
   });
 
+  it("missing parent fields stay null (never a default empty root)", async () => {
+    const { parent_author: _a, parent_permlink: _p, ...noParent } = existingPost;
+    expect(await readChainPost(async () => noParent, AUTHOR, PERMLINK)).toMatchObject({ parentAuthor: null, parentPermlink: null });
+  });
+
   it("legacy empty object -> null", async () => {
     expect(await readChainPost(async () => ({ author: "", permlink: "" }), AUTHOR, PERMLINK)).toBeNull();
   });

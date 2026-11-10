@@ -181,10 +181,35 @@ describe("publishPost as a SNAP (never a blog)", () => {
     expect(state.status).toBe("failed");
   });
 
-  it("legacy reserved without a parent but already on chain (ours) -> reconciled, no broadcast", async () => {
-    const { store } = makeStore({ publish_author: "skateuser" });
+  it("legacy reserved without a parent and ALREADY on chain as root -> still fail closed, no chain call, no broadcast", async () => {
+    const { store, state } = makeStore({ publish_author: "skateuser" });
     const d = deps(store, { getChainPost: vi.fn(async () => onChain({ parentAuthor: "", parentPermlink: "hive-173115" })) });
-    expect(await publishPost(POST_ID, d)).toMatchObject({ status: "published", reconciled: true });
+    expect(await publishPost(POST_ID, d)).toEqual({ status: "failed", code: "legacy_target_unknown" });
+    expect(d.getChainPost).not.toHaveBeenCalled();
+    expect(d.broadcast).not.toHaveBeenCalled();
+    expect(state.status).toBe("failed");
+  });
+
+  it("unreserved post ALREADY on chain under exactly the current target -> reserve target + published (reconciled), NO broadcast", async () => {
+    const { store, state } = makeStore();
+    const d = deps(store, { getChainPost: vi.fn(async () => onChain()) });
+    expect(await publishPost(POST_ID, d)).toMatchObject({ status: "published", reconciled: true, author: "skateuser" });
+    expect(d.broadcast).not.toHaveBeenCalled();
+    expect(state.post).toMatchObject({ publish_author: "skateuser", publish_parent_author: "peak.snaps", publish_parent_permlink: C1.parentPermlink });
+  });
+
+  it("unreserved post on chain with the same submission but ANOTHER parent -> conflict, nothing reserved", async () => {
+    const { store, state } = makeStore();
+    const d = deps(store, { getChainPost: vi.fn(async () => onChain({ parentPermlink: "snap-container-1" })) });
+    expect(await publishPost(POST_ID, d)).toEqual({ status: "failed", code: "destination_conflict" });
+    expect(d.broadcast).not.toHaveBeenCalled();
+    expect(state.post.publish_author).toBeNull();
+  });
+
+  it("chain post missing parent fields is never proof of ours (or of a root) -> conflict", async () => {
+    const { store } = makeStore({ publish_author: "skateuser", publish_parent_author: C1.parentAuthor, publish_parent_permlink: C1.parentPermlink });
+    const d = deps(store, { getChainPost: vi.fn(async () => onChain({ parentAuthor: null, parentPermlink: null })) });
+    expect(await publishPost(POST_ID, d)).toEqual({ status: "failed", code: "destination_conflict" });
     expect(d.broadcast).not.toHaveBeenCalled();
   });
 

@@ -50,8 +50,9 @@ export async function readChainPost(call: ContentCall, author: string, permlink:
   return {
     author: c.author,
     permlink: typeof c.permlink === "string" ? c.permlink : "",
-    parentAuthor: typeof c.parent_author === "string" ? c.parent_author : "",
-    parentPermlink: typeof c.parent_permlink === "string" ? c.parent_permlink : "",
+    // Missing fields stay null: an absent parent is never proof of a root post.
+    parentAuthor: typeof c.parent_author === "string" ? c.parent_author : null,
+    parentPermlink: typeof c.parent_permlink === "string" ? c.parent_permlink : null,
     submissionId,
   };
 }
