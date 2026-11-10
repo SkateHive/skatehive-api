@@ -52,11 +52,12 @@ export async function POST(req: NextRequest) {
     recordAttempt(emailKey, HOUR_MS);
   }
 
-  // Light resend throttle: one code per email per 30s.
+  // Resend throttle is independent for each authenticated app / first-party.
   const { data: recent } = await supabaseAdmin
     .from("userbase_email_otps")
     .select("created_at")
     .eq("email", email)
+    .eq("app_id", appIdOf(app) ?? "")
     .order("created_at", { ascending: false })
     .limit(1);
   const last = recent?.[0]?.created_at;

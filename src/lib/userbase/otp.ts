@@ -35,6 +35,7 @@ export async function createOtp(email: string, appId?: string | null): Promise<s
   ).toISOString();
   const { error } = await supabaseAdmin.from("userbase_email_otps").insert({
     email: email.toLowerCase(),
+    app_id: appId ?? "",
     code_hash: hashCode(email, code, appId),
     attempts: 0,
     expires_at: expiresAt,
@@ -56,6 +57,7 @@ export async function verifyOtp(
     .from("userbase_email_otps")
     .select("id, code_hash, attempts, expires_at, consumed_at")
     .eq("email", em)
+    .eq("app_id", appId ?? "")
     .is("consumed_at", null)
     .order("created_at", { ascending: false })
     .limit(1);

@@ -20,9 +20,11 @@ function req(body: Record<string, unknown>, headers: Record<string, string> = {}
   });
 }
 
+let db: ReturnType<typeof makeFakeSupabase>;
 async function load() {
+  db = makeFakeSupabase({ userbase_email_otps: [{ data: [], error: null }] });
   vi.doMock("@/app/utils/supabase/supabaseClient", () => ({
-    supabaseAdmin: makeFakeSupabase({ userbase_email_otps: [{ data: [], error: null }] }),
+    supabaseAdmin: db,
   }));
   vi.resetModules();
   return (await import("./route")).POST;
@@ -44,6 +46,7 @@ describe("POST /api/userbase/auth/otp/request — email brand", () => {
     expect(res.status).toBe(200);
     expect(lastBrand()).toBe("skatehive");
     expect(createOtp).toHaveBeenCalledWith("a@example.com", null);
+    expect(db.calls).toContainEqual({ table: "userbase_email_otps", method: "eq", args: ["app_id", ""] });
   });
 
   it("authenticated coletivoxv → Coletivo brand, app-bound OTP", async () => {
@@ -53,6 +56,7 @@ describe("POST /api/userbase/auth/otp/request — email brand", () => {
     expect(res.status).toBe(200);
     expect(lastBrand()).toBe("coletivoxv");
     expect(createOtp).toHaveBeenCalledWith("b@example.com", "coletivoxv");
+    expect(db.calls).toContainEqual({ table: "userbase_email_otps", method: "eq", args: ["app_id", "coletivoxv"] });
   });
 
   it("another authenticated app → safe Skatehive fallback", async () => {
