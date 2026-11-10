@@ -116,7 +116,17 @@ describe("submissions", () => {
     expect((await POST(req("/submissions", { method: "POST", body, headers: { "idempotency-key": "k".repeat(16) } }))).status).toBe(409);
   });
 
+  it("a forged/dead session never triggers an outbound media probe", async () => {
+    const { POST } = await import("./submissions/route");
+    store.me.mockRejectedValueOnce(new StoreError(401, "unauthorized"));
+    const res = await POST(req("/submissions", { method: "POST", body: { consent_publish: true, media: [{ type: "video", url: CID_URL }] }, headers: { "idempotency-key": "k".repeat(16) } }));
+    expect(res.status).toBe(401);
+    expect(media.checkVideoUrl).not.toHaveBeenCalled();
+    expect(store.createPost).not.toHaveBeenCalled();
+  });
+
   it("an unreachable/redirecting video is refused before the DB", async () => {
+    store.me.mockResolvedValueOnce({ user_id: "u", moderator_handle: null });
     const { POST } = await import("./submissions/route");
     media.checkVideoUrl.mockResolvedValueOnce({ ok: false, code: "media_redirect" } as never);
     const res = await POST(req("/submissions", { method: "POST", body: { consent_publish: true, media: [{ type: "video", url: CID_URL }] }, headers: { "idempotency-key": "k".repeat(16) } }));

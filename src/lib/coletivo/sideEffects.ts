@@ -39,6 +39,30 @@ export type OutboxDeps = {
 
 export type DrainResult = { claimed: number; done: number; skipped: number; errors: number; stoppedByDeadline: boolean };
 
+export type DrainOptions = {
+  /** Max items per kind in this run. */
+  limitPerKind: number;
+  /** Budget for STARTING work. Not a hard wall: a run can overrun by at most
+   * one item's callTimeoutMs (plus its completion report). */
+  deadlineMs: number;
+  /** Timeout for each external call (handler, report). */
+  callTimeoutMs?: number;
+};
+
+class TimeoutError extends Error {
+  code = "timeout";
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new TimeoutError("timeout")), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function handle(item: OutboxItem, deps: OutboxDeps): Promise<"done" | "skipped"> {
   if (item.kind === "soft_post") {
     if (item.publish_signer_kind !== "shared_default") return "skipped";
@@ -46,39 +70,47 @@ async function handle(item: OutboxItem, deps: OutboxDeps): Promise<"done" | "ski
     return "done";
   }
   if (!item.media.length) return "skipped";
+  // enqueueCrosspost dedupes against ANY existing queue row (crosspostOnce.ts),
+  // so a timed-out attempt that actually landed is reused on the next run.
   const queueId = await deps.enqueueCrosspost(item);
   await deps.linkCrosspost(item.post_id, queueId);
   return "done";
 }
 
-/** Process due follow-ups in bounded batches until done or the deadline. */
-export async function drainOutbox(
-  deps: OutboxDeps,
-  opts: { limitPerKind: number; deadlineMs: number }
-): Promise<DrainResult> {
+/**
+ * Process due follow-ups ONE claim at a time, checking the budget before each
+ * claim, so a run never holds more than one lease and stops starting new work
+ * once the budget is spent.
+ */
+export async function drainOutbox(deps: OutboxDeps, opts: DrainOptions): Promise<DrainResult> {
   const now = deps.now ?? Date.now;
+  const callTimeout = opts.callTimeoutMs ?? 5000;
   const stopAt = now() + opts.deadlineMs;
   const r: DrainResult = { claimed: 0, done: 0, skipped: 0, errors: 0, stoppedByDeadline: false };
+
   for (const kind of FOLLOWUP_KINDS) {
-    if (now() >= stopAt) {
-      r.stoppedByDeadline = true;
-      break;
-    }
-    const items = await deps.claim(kind, opts.limitPerKind);
-    r.claimed += items.length;
-    // Everything claimed is reported, even past the deadline: an unreported
-    // claim would sit until its lease expires.
-    for (const item of items) {
+    for (let n = 0; n < opts.limitPerKind; n++) {
+      if (now() >= stopAt) {
+        r.stoppedByDeadline = true;
+        return r;
+      }
+      const [item] = await withTimeout(deps.claim(kind, 1), callTimeout);
+      if (!item) break;
+      r.claimed += 1;
       try {
-        const outcome = await handle(item, deps);
-        await deps.complete(item, true, undefined, outcome === "skipped" ? { skipped: true } : undefined);
+        const outcome = await withTimeout(handle(item, deps), callTimeout);
+        await withTimeout(
+          deps.complete(item, true, undefined, outcome === "skipped" ? { skipped: true } : undefined),
+          callTimeout
+        );
         if (outcome === "skipped") r.skipped += 1;
         else r.done += 1;
       } catch (e) {
         const code = (e as { code?: unknown })?.code;
-        await deps
-          .complete(item, false, typeof code === "string" && /^[a-z0-9_]{1,64}$/.test(code) ? code : `${kind}_failed`)
-          .catch(() => {});
+        await withTimeout(
+          deps.complete(item, false, typeof code === "string" && /^[a-z0-9_]{1,64}$/.test(code) ? code : `${kind}_failed`),
+          callTimeout
+        ).catch(() => {});
         r.errors += 1;
       }
     }

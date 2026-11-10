@@ -2,7 +2,8 @@ import { HiveClient } from "@/app/utils/hive/hiveUtils";
 import { supabaseAdmin } from "@/app/utils/supabase/supabaseClient";
 import { resolveSigner, broadcastComment } from "@/lib/userbase/posting";
 import { getSafeUserIdentifier } from "@/lib/userbase/safeUser";
-import { enqueueCrossPost, type InstagramQueuePayload } from "@/lib/crosspost/queue";
+import { CROSSPOST_QUEUE_TABLE, enqueueCrossPost, type InstagramQueuePayload } from "@/lib/crosspost/queue";
+import { enqueueCrosspostOnce } from "./crosspostOnce";
 import { buildInstagramCaption } from "@/lib/instagram/caption";
 import { COLETIVO_APP_ID, isPublishEnabled } from "./config";
 import { publishPost, type ChainPost, type PublishOutcome } from "./publisher";
@@ -57,7 +58,27 @@ async function recordSoftPost(item: OutboxItem): Promise<void> {
   if (error) throw new Error("soft_post_failed");
 }
 
+/** Any queue row for this post, whatever its status (durable dedupe). */
+async function findAnyCrosspost(target: "instagram", author: string, permlink: string) {
+  if (!supabaseAdmin) throw new Error("unavailable");
+  const { data, error } = await supabaseAdmin
+    .from(CROSSPOST_QUEUE_TABLE)
+    .select("id, status")
+    .eq("target", target)
+    .eq("hive_author", author)
+    .eq("hive_permlink", permlink)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  if (error) throw new Error("crosspost_lookup_failed");
+  return (data?.[0] as { id: string; status: string } | undefined) ?? null;
+}
+
 async function enqueueInstagram(post: OutboxItem): Promise<string> {
+  const r = await enqueueCrosspostOnce(post, { findAny: findAnyCrosspost, enqueue: () => enqueueInstagramNew(post) });
+  return r.id;
+}
+
+async function enqueueInstagramNew(post: OutboxItem): Promise<string> {
   const video = post.media.find((m) => m.type === "video");
   const image = post.media.find((m) => m.type === "image");
   if (!video && !image) throw new Error("no_media");
@@ -99,7 +120,7 @@ const outboxDeps = {
 };
 
 /** Process due follow-ups (bounded). Never broadcasts to Hive. */
-export function drainFollowups(opts = { limitPerKind: 10, deadlineMs: 8000 }): Promise<DrainResult> {
+export function drainFollowups(opts: { limitPerKind: number; deadlineMs: number; callTimeoutMs?: number } = { limitPerKind: 10, deadlineMs: 8000, callTimeoutMs: 5000 }): Promise<DrainResult> {
   return drainOutbox(outboxDeps, opts);
 }
 
@@ -132,7 +153,7 @@ export async function runPublishFlow(postId: string): Promise<PublishOutcome> {
     return { status: "retryable", code: "internal_error" };
   }
   if (outcome.status === "published") {
-    await drainFollowups({ limitPerKind: 5, deadlineMs: 5000 }).catch(() => null);
+    await drainFollowups({ limitPerKind: 5, deadlineMs: 5000, callTimeoutMs: 5000 }).catch(() => null);
   }
   return outcome;
 }
@@ -143,7 +164,8 @@ export type ResumeReport = { published: number; retryable: number; failed: numbe
  * Recovery after a crash/timeout (moderator action or a guarded cron): pick up
  * approved posts and expired publish leases (the DB claim decides; failed posts
  * are NOT requeued here), then drain due follow-ups, including for posts that
- * were already published. Bounded by count and wall-clock deadline.
+ * were already published. Bounded by count and a SOFT time budget (new work
+ * stops at the deadline; in-flight calls have their own timeouts).
  */
 export async function resumeColetivo(opts = { maxPublishes: 5, deadlineMs: 20000 }): Promise<ResumeReport> {
   const stopAt = Date.now() + opts.deadlineMs;
@@ -161,6 +183,7 @@ export async function resumeColetivo(opts = { maxPublishes: 5, deadlineMs: 20000
     else break; // busy (nothing due) or disabled
   }
   const left = Math.max(0, stopAt - Date.now());
-  if (left > 1000) report.followups = await drainFollowups({ limitPerKind: 10, deadlineMs: left - 500 }).catch(() => null);
+  // Soft budget: starting stops at the deadline; one in-flight item may overrun by its call timeout.
+  if (left > 1000) report.followups = await drainFollowups({ limitPerKind: 10, deadlineMs: left - 500, callTimeoutMs: 5000 }).catch(() => null);
   return report;
 }

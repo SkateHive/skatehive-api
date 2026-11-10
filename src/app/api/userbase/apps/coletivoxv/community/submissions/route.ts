@@ -2,7 +2,7 @@ import { NextRequest, after } from "next/server";
 import { err, json, requireSessionHash, storeErrorResponse } from "@/lib/coletivo/http";
 import { checkVideoUrl } from "@/lib/coletivo/mediaCheck";
 import { runPublishFlow } from "@/lib/coletivo/service";
-import { createPost } from "@/lib/coletivo/store";
+import { createPost, me } from "@/lib/coletivo/store";
 import { parseIdempotencyKey, parseSubmissionInput, requestHash } from "@/lib/coletivo/validation";
 import { submissionView } from "@/lib/coletivo/views";
 
@@ -18,6 +18,14 @@ export async function POST(req: NextRequest) {
   if (!idem) return err(400, "idempotency_key_required");
   const parsed = parseSubmissionInput(await req.json().catch(() => null));
   if (!parsed.ok) return err(400, parsed.code, parsed.error);
+
+  // Resolve the session in the DB BEFORE any outbound media probe, so a forged
+  // or dead token can't make the API fetch anything.
+  try {
+    await me(s.tokenHash);
+  } catch (e) {
+    return storeErrorResponse(e);
+  }
 
   for (const m of parsed.value.media) {
     if (m.type !== "video") continue;

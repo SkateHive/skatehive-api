@@ -44,15 +44,29 @@ describe("drainOutbox", () => {
     expect(d.complete).toHaveBeenCalledWith(expect.objectContaining({ outbox_id: "o1" }), false, "soft_post_failed");
   });
 
-  it("bounded: batch size respected and the deadline stops further claims", async () => {
+  it("one claim at a time; batch size per kind respected", async () => {
+    const d = deps({ soft_post: [item(), item(), item()] });
+    await drainOutbox(d, { limitPerKind: 2, deadlineMs: 1000 });
+    expect(d.claim).toHaveBeenCalledTimes(3); // 2 soft_post + 1 empty instagram
+    for (const call of (d.claim as ReturnType<typeof vi.fn>).mock.calls) expect(call[1]).toBe(1);
+  });
+
+  it("budget is checked before EVERY claim: no new work once spent", async () => {
     let t = 0;
     const d = deps({ soft_post: [item(), item(), item()], instagram_enqueue: [item({ kind: "instagram_enqueue" })] }, {
       now: () => t,
       recordSoftPost: vi.fn(async () => { t += 600; }),
     });
-    const r = await drainOutbox(d, { limitPerKind: 2, deadlineMs: 1000 });
-    expect(d.claim).toHaveBeenCalledTimes(1); // instagram not claimed after the deadline
+    const r = await drainOutbox(d, { limitPerKind: 10, deadlineMs: 1000 });
     expect(r).toMatchObject({ claimed: 2, done: 2, stoppedByDeadline: true });
+    expect(d.claim).toHaveBeenCalledTimes(2);
+  });
+
+  it("a hung handler is cut by the per-call timeout and reported as retryable", async () => {
+    const d = deps({ soft_post: [item()] }, { recordSoftPost: () => new Promise(() => {}) });
+    const r = await drainOutbox(d, { limitPerKind: 1, deadlineMs: 1000, callTimeoutMs: 20 });
+    expect(r).toMatchObject({ errors: 1, done: 0 });
+    expect(d.complete).toHaveBeenCalledWith(expect.objectContaining({ outbox_id: "o1" }), false, "timeout");
   });
 
   it("never touches Hive: no broadcast dependency exists in this module", async () => {
