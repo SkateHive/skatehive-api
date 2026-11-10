@@ -24,6 +24,8 @@ function missingPostError(author = AUTHOR, permlink = PERMLINK) {
 const existingPost = {
   author: AUTHOR,
   permlink: PERMLINK,
+  parent_author: "peak.snaps",
+  parent_permlink: "snap-container-1794317040",
   json_metadata: JSON.stringify({ app: "coletivoxv/1.0", coletivoxv: { submission_id: "aebc13b3-fdb2-4d83-b072-51f72e2e4345" } }),
 };
 
@@ -36,6 +38,8 @@ describe("readChainPost", () => {
     expect(await readChainPost(async () => existingPost, AUTHOR, PERMLINK)).toEqual({
       author: AUTHOR,
       permlink: PERMLINK,
+      parentAuthor: "peak.snaps",
+      parentPermlink: "snap-container-1794317040",
       submissionId: "aebc13b3-fdb2-4d83-b072-51f72e2e4345",
     });
   });
@@ -43,6 +47,11 @@ describe("readChainPost", () => {
   it("existing post from another app / bad metadata -> submissionId null (publisher treats as conflict)", async () => {
     expect(await readChainPost(async () => ({ ...existingPost, json_metadata: "{not json" }), AUTHOR, PERMLINK)).toMatchObject({ submissionId: null });
     expect(await readChainPost(async () => ({ ...existingPost, json_metadata: "{}" }), AUTHOR, PERMLINK)).toMatchObject({ submissionId: null });
+  });
+
+  it("missing parent fields stay null (never a default empty root)", async () => {
+    const { parent_author: _a, parent_permlink: _p, ...noParent } = existingPost;
+    expect(await readChainPost(async () => noParent, AUTHOR, PERMLINK)).toMatchObject({ parentAuthor: null, parentPermlink: null });
   });
 
   it("legacy empty object -> null", async () => {

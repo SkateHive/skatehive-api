@@ -7,7 +7,14 @@ import { enqueueCrosspostOnce } from "./crosspostOnce";
 import { buildInstagramCaption } from "@/lib/instagram/caption";
 import { COLETIVO_APP_ID, isPublishEnabled } from "./config";
 import { readChainPost } from "./chainRead";
-import { publishPost, type ChainPost, type PublishOutcome } from "./publisher";
+import {
+  SNAP_PARENT_AUTHOR,
+  isValidSnapTarget,
+  publishPost,
+  type ChainPost,
+  type PublishOutcome,
+  type SnapTarget,
+} from "./publisher";
 import { drainOutbox, type DrainResult, type OutboxItem } from "./sideEffects";
 import { claimOutbox, completeOutbox, linkCrosspost, publishStore } from "./store";
 
@@ -17,6 +24,27 @@ import { claimOutbox, completeOutbox, linkCrosspost, publishStore } from "./stor
 export async function getChainPost(author: string, permlink: string): Promise<ChainPost> {
   // A proven "does not exist" is absent; any other failure is rethrown (see chainRead.ts).
   return readChainPost((a, p) => HiveClient.database.call("get_content", [a, p]), author, permlink);
+}
+
+/**
+ * The current @peak.snaps container, exactly like the web/mobile composers:
+ * the latest ROOT post of peak.snaps (get_discussions_by_author_before_date).
+ * Fails closed: anything that is not a root snap-container-* post throws.
+ */
+export async function resolveSnapContainer(): Promise<SnapTarget> {
+  const before = new Date().toISOString().split(".")[0];
+  const rows = (await HiveClient.database.call("get_discussions_by_author_before_date", [
+    SNAP_PARENT_AUTHOR,
+    "",
+    before,
+    1,
+  ])) as Array<{ author?: string; permlink?: string; parent_author?: string }> | null;
+  const top = rows?.[0];
+  const target = { parentAuthor: top?.author || "", parentPermlink: top?.permlink || "" };
+  if (!top || top.parent_author !== "" || !isValidSnapTarget(target)) {
+    throw new Error("snap_container_unavailable");
+  }
+  return target;
 }
 
 export function permalinkUrl(author: string, permlink: string): string {
@@ -118,6 +146,7 @@ function publishDeps() {
     store: publishStore,
     enabled: isPublishEnabled(),
     resolveSigner,
+    resolveSnapContainer,
     safeUserId: getSafeUserIdentifier,
     getChainPost,
     broadcast: (signer: Parameters<typeof broadcastComment>[0], c: import("./publisher").HiveComment) =>
