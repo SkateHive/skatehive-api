@@ -9,6 +9,11 @@ const hive = (r: PostRow) =>
     ? { author: r.publish_author, permlink: r.publish_permlink, url: `https://skatehive.app/post/${r.publish_author}/${r.publish_permlink}` }
     : null;
 
+const publicationType = (r: PostRow) => (r.publication_type === "article" ? "article" : "snap");
+
+/** Cover = the first PHOTO in media (no separate field), or null. */
+const cover = (r: PostRow) => (Array.isArray(r.media) ? r.media.find((m) => m.type === "image")?.url ?? null : null);
+
 const context = (r: PostRow) => (r.context_kind && r.context_slug ? { kind: r.context_kind, slug: r.context_slug } : null);
 
 const author = (r: PostRow) =>
@@ -21,8 +26,10 @@ export function submissionView(r: PostRow) {
   return {
     id: r.id,
     status: r.status,
+    publication_type: publicationType(r),
     kind: r.kind,
     title: r.title,
+    cover: cover(r),
     body: r.body,
     media: r.media,
     context: context(r),
@@ -46,8 +53,10 @@ export function queueView(r: PostRow) {
 export function feedView(r: PostRow) {
   return {
     id: r.id,
+    publication_type: publicationType(r),
     kind: r.kind,
     title: r.title,
+    cover: cover(r),
     body: r.body,
     media: r.media,
     context: context(r),

@@ -14,7 +14,7 @@ describe("parseSubmissionInput", () => {
     const r = parseSubmissionInput({ ...base, status: "published", author: "xvlad", app: "x", permlink: "p", approved: true });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.value).toEqual({ title: null, body: "manobra na praça", media: [], context: null, kind: "text" });
+      expect(r.value).toEqual({ publicationType: "snap", title: null, body: "manobra na praça", media: [], context: null, kind: "text" });
       expect(Object.keys(r.value)).not.toContain("status");
     }
   });
@@ -84,3 +84,42 @@ describe("helpers", () => {
     expect(isGatewayCidUrl(`https://ipfs.skatehive.app/ipfs/${CID}/x`)).toBe(false);
   });
 });
+
+describe("publication_type (snap default, article explicit)", () => {
+  const img = { type: "image", url: "https://images.hive.blog/a.jpg" };
+  it("OLD payload without the field = snap; hash identical to the pre-article formula", async () => {
+    const r = parseSubmissionInput(base);
+    if (!r.ok) throw new Error();
+    expect(r.value.publicationType).toBe("snap");
+    const crypto = await import("crypto");
+    const legacy = crypto.createHash("sha256").update(JSON.stringify([r.value.title, r.value.body, r.value.media, r.value.context])).digest("hex");
+    expect(requestHash(r.value)).toBe(legacy); // retries made before this change still match
+  });
+  it("rejects unknown types; never inferred from media", () => {
+    expect(parseSubmissionInput({ ...base, publication_type: "blog" })).toMatchObject({ code: "invalid_publication_type" });
+    const photo = parseSubmissionInput({ ...base, media: [img] });
+    expect(photo.ok && photo.value.publicationType).toBe("snap");
+  });
+  it("article: title 1..120 and body 1..20000 required; same media rules as snap", () => {
+    const art = { consent_publish: true, publication_type: "article" };
+    expect(parseSubmissionInput({ ...art, body: "x" })).toMatchObject({ code: "title_required" });
+    expect(parseSubmissionInput({ ...art, title: "   ", body: "x" })).toMatchObject({ code: "title_required" });
+    expect(parseSubmissionInput({ ...art, title: "T", media: [img] })).toMatchObject({ code: "invalid_body" });
+    expect(parseSubmissionInput({ ...art, title: "x".repeat(121), body: "x" })).toMatchObject({ code: "invalid_title" });
+    expect(parseSubmissionInput({ ...art, title: "T", body: "x".repeat(20001) })).toMatchObject({ code: "invalid_body" });
+    const ok = parseSubmissionInput({ ...art, title: "T", body: "x".repeat(20000), media: [img, img] });
+    expect(ok.ok && ok.value).toMatchObject({ publicationType: "article", kind: "photo" });
+    const v = { type: "video", url: "https://ipfs.skatehive.app/ipfs/Qm" + "a".repeat(44) };
+    expect(parseSubmissionInput({ ...art, title: "T", body: "x", media: [v, v] })).toMatchObject({ code: "invalid_media" });
+  });
+  it("snap body limit stays 5000", () => {
+    expect(parseSubmissionInput({ ...base, body: "x".repeat(5001) })).toMatchObject({ code: "invalid_body" });
+  });
+  it("same content as snap vs article -> different hashes (key reuse across types = conflict)", () => {
+    const s = parseSubmissionInput({ ...base, title: "T" });
+    const a = parseSubmissionInput({ ...base, title: "T", publication_type: "article" });
+    if (!s.ok || !a.ok) throw new Error();
+    expect(requestHash(s.value)).not.toBe(requestHash(a.value));
+  });
+});
+

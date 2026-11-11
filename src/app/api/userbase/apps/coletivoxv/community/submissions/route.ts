@@ -37,6 +37,7 @@ export async function POST(req: NextRequest) {
     const row = await createPost(s.tokenHash, {
       idempotencyKey: idem,
       requestHash: requestHash(parsed.value),
+      publicationType: parsed.value.publicationType,
       kind: parsed.value.kind,
       title: parsed.value.title,
       body: parsed.value.body,
