@@ -19,7 +19,12 @@ export const chainReader: ChainReader = {
 };
 
 export const engagementCache = new TtlCache<Extract<Engagement, { status: "ok" }>>(500, 30_000);
-export const commentsCache = new TtlCache<{ raw: unknown; replies: unknown }>(100, 30_000);
+// Raw (content, replies) pairs can be up to ~3 MiB each: few entries and a
+// total byte budget (approximate JSON size) keep memory bounded.
+export const commentsCache = new TtlCache<{ raw: unknown; replies: unknown }>(20, 30_000, Date.now, {
+  maxBytes: 8 * 1024 * 1024,
+  sizeOf: (v) => JSON.stringify(v).length,
+});
 
 /**
  * Persisted destinations of the PUBLISHED coletivoxv posts among `ids`

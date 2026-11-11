@@ -23,7 +23,46 @@ function streamResponse(chunks: Uint8Array[], opts: { hang?: boolean } = {}) {
 }
 const code = async (p: Promise<unknown>) => { try { await p; return "resolved"; } catch (e) { return (e as RpcError).code; } };
 
+function trackedBody(text = "x") {
+  const state = { canceled: false };
+  const body = new ReadableStream<Uint8Array>({
+    start(ctrl) { ctrl.enqueue(new TextEncoder().encode(text)); },
+    cancel() { state.canceled = true; },
+  });
+  return { body, state };
+}
+
 describe("hiveRpc (bounded, no background retries)", () => {
+  it("declared content-length over the cap: body canceled (not left unread), no failover", async () => {
+    const t = trackedBody();
+    const f = vi.fn(async () => new Response(t.body, { status: 200, headers: { "content-length": "99999999" } }));
+    expect(await code(hiveRpc("m", [], { nodes: NODES, fetchImpl: f, maxBytes: 1000 }))).toBe("too_large");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(t.state.canceled).toBe(true);
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it("non-OK HTTP: body canceled, signal aborted, then failover", async () => {
+    const t = trackedBody("<html>502</html>");
+    let firstSignal: AbortSignal | undefined;
+    const good = ok(7);
+    const f = vi.fn()
+      .mockImplementationOnce(async (_u: string, init: RequestInit) => { firstSignal = init.signal!; return new Response(t.body, { status: 502 }); })
+      .mockImplementation(good);
+    expect(await hiveRpc("m", [], { nodes: NODES, fetchImpl: f })).toBe(7);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(t.state.canceled).toBe(true);
+    expect(firstSignal!.aborted).toBe(true);
+  });
+
+  it("the request signal is aborted after a successful call too (no lingering connection)", async () => {
+    let seen: AbortSignal | undefined;
+    const base = ok(1);
+    const f = vi.fn(async (u: string, init: RequestInit) => { seen = init.signal!; return base(u, init); });
+    await hiveRpc("m", [], { nodes: NODES, fetchImpl: f });
+    expect(seen!.aborted).toBe(true);
+  });
+
   it("returns the result and posts a JSON-RPC 2.0 call with redirect=error and a signal", async () => {
     const f = ok({ author: "a" });
     expect(await hiveRpc("condenser_api.get_content", ["a", "p"], { nodes: NODES, fetchImpl: f })).toEqual({ author: "a" });

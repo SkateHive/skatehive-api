@@ -25,13 +25,17 @@ let nextId = 1;
 
 async function readCapped(res: Response, maxBytes: number, signal: AbortSignal): Promise<string> {
   const declared = Number(res.headers.get("content-length") || "");
-  if (Number.isFinite(declared) && declared > maxBytes) throw new RpcError("too_large");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    res.body?.cancel().catch(() => {}); // never awaited: it must not hang
+    throw new RpcError("too_large");
+  }
   if (!res.body) throw new RpcError("bad_response", "no body");
   const reader = res.body.getReader();
   // Every read races the abort signal, so a hung body ends with the budget
   // even if the fetch implementation does not error the stream on abort.
+  let fail: () => void = () => {};
   const aborted = new Promise<never>((_, reject) => {
-    const fail = () => {
+    fail = () => {
       // Reject FIRST: cancelling resolves the pending read with done=true, and
       // a truncated body must never be parsed as if it were complete.
       reject(signal.reason instanceof RpcError ? signal.reason : new RpcError("timeout"));
@@ -41,20 +45,24 @@ async function readCapped(res: Response, maxBytes: number, signal: AbortSignal):
     else signal.addEventListener("abort", fail, { once: true });
   });
   aborted.catch(() => {});
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await Promise.race([reader.read(), aborted]);
-    if (signal.aborted) throw signal.reason instanceof RpcError ? signal.reason : new RpcError("timeout");
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => {});
-      throw new RpcError("too_large");
+  try {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await Promise.race([reader.read(), aborted]);
+      if (signal.aborted) throw signal.reason instanceof RpcError ? signal.reason : new RpcError("timeout");
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        reader.cancel().catch(() => {}); // not awaited: must not hang on a stuck source
+        throw new RpcError("too_large");
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+    return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
+  } finally {
+    signal.removeEventListener("abort", fail);
   }
-  return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
 }
 
 async function attempt(url: string, method: string, params: unknown, o: Required<Omit<RpcOptions, "signal" | "nodes">> & { signal?: AbortSignal }): Promise<unknown> {
@@ -79,7 +87,10 @@ async function attempt(url: string, method: string, params: unknown, o: Required
     } catch (e) {
       throw ctrl.signal.aborted ? (ctrl.signal.reason instanceof RpcError ? ctrl.signal.reason : new RpcError("timeout")) : new RpcError("network", (e as Error)?.name);
     }
-    if (!res.ok) throw new RpcError("network", `http ${res.status}`);
+    if (!res.ok) {
+      res.body?.cancel().catch(() => {}); // drop the unread body (not awaited)
+      throw new RpcError("network", `http ${res.status}`);
+    }
     let text: string;
     try {
       text = await readCapped(res, o.maxBytes, ctrl.signal);
@@ -100,6 +111,9 @@ async function attempt(url: string, method: string, params: unknown, o: Required
   } finally {
     clearTimeout(timer);
     o.signal?.removeEventListener("abort", onOuter);
+    // Always end the request: after success the body is fully read already;
+    // on any error path this tears down the connection and any unread body.
+    ctrl.abort(new RpcError("aborted"));
   }
 }
 

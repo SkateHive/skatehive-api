@@ -279,26 +279,47 @@ export async function readComments(
 // ---- bounded TTL cache (per instance) -----------------------------------
 
 export class TtlCache<V> {
-  private map = new Map<string, { v: V; at: number }>();
-  constructor(private max: number, private ttlMs: number, private now: () => number = Date.now) {}
+  private map = new Map<string, { v: V; at: number; bytes: number }>();
+  private bytes = 0;
+  constructor(
+    private max: number,
+    private ttlMs: number,
+    private now: () => number = Date.now,
+    private bound: { maxBytes: number; sizeOf: (v: V) => number } | null = null
+  ) {}
+  private drop(k: string): void {
+    const e = this.map.get(k);
+    if (!e) return;
+    this.bytes -= e.bytes;
+    this.map.delete(k);
+  }
   get(k: string): V | undefined {
     const e = this.map.get(k);
     if (!e) return undefined;
     if (this.now() - e.at > this.ttlMs) {
-      this.map.delete(k);
+      this.drop(k);
       return undefined;
     }
     return e.v;
   }
   set(k: string, v: V): void {
-    this.map.delete(k);
-    this.map.set(k, { v, at: this.now() });
-    while (this.map.size > this.max) this.map.delete(this.map.keys().next().value as string);
+    this.drop(k);
+    const bytes = this.bound ? this.bound.sizeOf(v) : 0;
+    if (this.bound && bytes > this.bound.maxBytes) return; // too big to cache at all
+    this.map.set(k, { v, at: this.now(), bytes });
+    this.bytes += bytes;
+    while (this.map.size > this.max || (this.bound && this.bytes > this.bound.maxBytes)) {
+      this.drop(this.map.keys().next().value as string);
+    }
+  }
+  get totalBytes() {
+    return this.bytes;
   }
   get size() {
     return this.map.size;
   }
   clear(): void {
     this.map.clear();
+    this.bytes = 0;
   }
 }

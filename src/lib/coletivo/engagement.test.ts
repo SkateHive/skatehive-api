@@ -163,6 +163,17 @@ describe("hiveDateToIso / TtlCache", () => {
     expect(hiveDateToIso("2026-11-10T19:00:00")).toBe("2026-11-10T19:00:00.000Z");
     expect(hiveDateToIso("2026-11-10")).toBeNull();
   });
+  it("cache is also bounded by total bytes; oversized values are not cached", () => {
+    const c = new TtlCache<string>(10, 1000, () => 0, { maxBytes: 10, sizeOf: (v) => v.length });
+    c.set("a", "xxxx"); c.set("b", "xxxx"); c.set("c", "xxxx"); // 12 bytes > 10 -> evict oldest
+    expect(c.get("a")).toBeUndefined();
+    expect(c.totalBytes).toBe(8);
+    c.set("big", "x".repeat(11));
+    expect(c.get("big")).toBeUndefined();
+    expect(c.totalBytes).toBe(8);
+    c.clear();
+    expect(c.totalBytes).toBe(0);
+  });
   it("cache is bounded and expires", () => {
     let t = 0;
     const c = new TtlCache<number>(2, 100, () => t);
