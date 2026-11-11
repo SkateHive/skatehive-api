@@ -116,3 +116,27 @@ outbox and never touch Hive. The Instagram request is idempotent by lookup
   verified.
 - Everything uploaded is public (images.hive.blog / IPFS) even if the
   submission is later rejected.
+
+## Engagement (read-only)
+
+App credential only, no session; PUBLISHED coletivoxv posts only (destination
+from the DB, never from the client; the legacy blog post works too). Read with
+a bounded Hive RPC client (`src/lib/coletivo/hiveRpc.ts`: fetch with abort on
+headers+body, 3 MiB streamed cap, at most 2 nodes, 4s each, outer signal), on
+the post's OWN author/permlink, never the `@peak.snaps` container. The chain
+post must carry `json_metadata.coletivoxv.submission_id` and the expected parent.
+
+- `GET /engagement?ids=a,b` (1..24): `{items:{[id]:{votes_up, comments_total, updated_at}}, unavailable:[ids]}`.
+  `votes_up` = distinct voters with `percent > 0`; `comments_total` = chain
+  `children` = ALL replies (direct + nested, verified on real threads).
+  Unknown/unpublished ids are absent; chain failures go to `unavailable` (never
+  0); all failed -> 503. Concurrency 4, global deadline 8s that also aborts
+  in-flight fetches. In-memory cache 30s (500 entries); `Cache-Control:
+  private, max-age=15` (no CDN, so the credential check always runs).
+- `GET /submissions/:id/comments?limit&cursor`: FIRST-LEVEL replies, oldest
+  first, cursor on `(created, author, permlink)`; `total_replies` (all) and
+  `direct_count` (first level); items `{id, author{handle, avatar_url},
+  created_at (UTC ISO), body (raw, render as text), body_truncated, replies,
+  votes_up, low_score}`. More than 1000 direct replies -> `partial: true` +
+  `thread_url`. A malformed/foreign reply makes the list unavailable (503),
+  never silently dropped; unknown/unpublished -> 404 without the destination.
