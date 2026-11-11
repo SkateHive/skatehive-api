@@ -11,8 +11,20 @@ const hive = (r: PostRow) =>
 
 const publicationType = (r: PostRow) => (r.publication_type === "article" ? "article" : "snap");
 
-/** Cover = the first PHOTO in media (no separate field), or null. */
-const cover = (r: PostRow) => (Array.isArray(r.media) ? r.media.find((m) => m.type === "image")?.url ?? null : null);
+/**
+ * Cover for feed/OG/teaser (no separate field): the first PHOTO in media;
+ * when there is no photo, the poster of the first video that has one; else
+ * null. Photos always win. Media and on-chain metadata are not affected.
+ */
+export const cover = (r: Pick<PostRow, "media">): string | null => {
+  if (!Array.isArray(r.media)) return null;
+  const photo = r.media.find((m) => m.type === "image");
+  if (photo) return photo.url;
+  for (const m of r.media) {
+    if (m.type === "video" && typeof m.poster === "string" && m.poster) return m.poster;
+  }
+  return null;
+};
 
 const context = (r: PostRow) => (r.context_kind && r.context_slug ? { kind: r.context_kind, slug: r.context_slug } : null);
 
