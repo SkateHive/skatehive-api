@@ -14,7 +14,8 @@ export const MODERATOR_HIVE_HANDLES: readonly string[] = ["wilbor", "xvlad"];
 
 export const LIMITS = {
   titleMax: 120,
-  bodyMax: 5000,
+  bodyMax: 5000, // snap
+  articleBodyMax: 20000,
   mediaMax: 10,
   videosMax: 1,
   rejectReasonMax: 500,

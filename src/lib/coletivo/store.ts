@@ -113,6 +113,8 @@ export type PostRow = {
   id: string;
   status: string;
   kind: string;
+  /** 0043; absent on rows from an older DB = snap. */
+  publication_type?: "snap" | "article";
   title: string | null;
   body: string;
   media: MediaItem[];
@@ -140,6 +142,7 @@ export const createPost = async (
   p: {
     idempotencyKey: string;
     requestHash: string;
+    publicationType: "snap" | "article";
     kind: string;
     title: string | null;
     body: string;
@@ -160,6 +163,7 @@ export const createPost = async (
       p_context_kind: p.context?.kind ?? null,
       p_context_slug: p.context?.slug ?? null,
       p_consent_publish: true,
+      p_publication_type: p.publicationType,
     })
   );
 
@@ -214,6 +218,10 @@ export const listFeed = async (context: { kind: string | null; slug: string | nu
     })
   );
 
+/** Published post by id, public fields only (0043 userbase_app_post_public). */
+export const getPublicPost = async (postId: string) =>
+  one<PostRow>(await call("userbase_app_post_public", { p_app: app, p_post_id: postId }));
+
 export const requeuePublish = async (tokenHash: string, postId: string) =>
   one<PostRow>(await call("userbase_app_post_publish_requeue", { p_token_hash: tokenHash, p_app: app, p_post_id: postId }));
 
@@ -240,6 +248,7 @@ function toPublishPost(r: DbPost): PostForPublish {
     publish_permlink: r.publish_permlink || "",
     publish_parent_author: r.publish_parent_author ?? null,
     publish_parent_permlink: r.publish_parent_permlink ?? null,
+    publication_type: r.publication_type === "article" ? "article" : "snap",
   };
 }
 

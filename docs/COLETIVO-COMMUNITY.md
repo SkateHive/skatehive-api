@@ -65,6 +65,28 @@ with `409 withdrawn` before any requeue, and resume/cron never pick `failed`.
 `(ts desc, id desc)`: `created_at` for mine/queue, `published_at` for the feed.
 `limit` 1..50, default 20.
 
+## Post types
+
+`publication_type` is explicit and immutable (migration 0043), separate from
+`kind` (text/photo/video), and never inferred from media:
+
+- `snap` (default; a missing field means snap, so older clients are unchanged):
+  reply to the current `@peak.snaps` container, `title: ""`, body <= 5000.
+- `article`: root post in the community: parent author `""` (EMPTY STRING,
+  distinct from the legacy NULL) and parent permlink `hive-173115`; title
+  1..120 and body 1..20000 required; the title goes on chain.
+
+Same media rules for both. Cover = the first photo in `media` (article
+`image[0]`); a video's poster stays in `thumbnail`. Request hash: unchanged for
+snaps (old retries still match), prefixed with `article` for articles. The
+legacy published blog (parent NULL) is classified `article` by 0043 without
+any broadcast. `GET /community/posts/:id` returns a published post (public
+fields, `publication_type`, `cover`) for the article page; 404 otherwise.
+Rollout: 0043 first (current API keeps creating snaps), then this API, then
+the site. With an older API on 0043, an article can never be published as a
+snap: 0043's reserve_target rejects a mismatched destination before any
+broadcast.
+
 ## Publishing
 
 Posts are published as Skatehive **snaps**: a reply to the current

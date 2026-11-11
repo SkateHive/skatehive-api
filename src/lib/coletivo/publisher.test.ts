@@ -20,7 +20,8 @@ function makeStore(post: Partial<PostForPublish> = {}, status = "approved", atte
       publish_author: null, publish_permlink: PERMLINK, publish_parent_author: null, publish_parent_permlink: null,
       ...post,
     } as PostForPublish,
-    signerKind: null as string | null,
+    // A pre-reserved fixture behaves as reserved with the shared default signer.
+    signerKind: (post.publish_author ? "shared_default" : null) as string | null,
     legacyDetail: null as string | null,
   };
   const store: PublishStore = {
@@ -317,3 +318,122 @@ describe("buildComment (snap contract)", () => {
     expect(c.body).toContain('title="a&quot;&lt;b"'); // ">" stripped like the web composer
   });
 });
+
+describe("articles (root post) and the empty-string parent", () => {
+  const ART: SnapTarget = { parentAuthor: "", parentPermlink: "hive-173115" };
+  const art = (over: Partial<PostForPublish> = {}) => makeStore({ publication_type: "article", title: "Arte do Corre", body: "texto", ...over });
+
+  it("new article: root target ('' + hive-173115) saved before broadcast, title on chain, no container lookup", async () => {
+    const { store, state } = art();
+    const broadcast = vi.fn(async (_s, c) => {
+      expect(state.post.publish_parent_author).toBe("");
+      expect(state.post.publish_parent_permlink).toBe("hive-173115");
+      expect(c).toMatchObject({ parentAuthor: "", parentPermlink: "hive-173115", title: "Arte do Corre" });
+      expect(c.jsonMetadata.tags).toEqual(["hive-173115", "coletivoxv"]);
+      expect(c.jsonMetadata.coletivoxv.publication_type).toBe("article");
+      expect(c.body.startsWith("**")).toBe(false); // title is not repeated in the body
+    });
+    const d = deps(store, { broadcast });
+    expect(await publishPost(POST_ID, d)).toMatchObject({ status: "published" });
+    expect(d.resolveSnapContainer).not.toHaveBeenCalled();
+    expect(broadcast).toHaveBeenCalledTimes(1);
+  });
+
+  it("saved parent '' is a REAL saved target (not 'absent'): retry broadcasts to it, never mark_legacy", async () => {
+    const { store, state } = art({ publish_author: "skateuser", publish_parent_author: "", publish_parent_permlink: "hive-173115" });
+    const mark = vi.spyOn(store, "markLegacy");
+    const d = deps(store);
+    expect(await publishPost(POST_ID, d)).toMatchObject({ status: "published" });
+    expect(mark).not.toHaveBeenCalled();
+    expect(d.resolveSnapContainer).not.toHaveBeenCalled();
+    expect((d.broadcast as any).mock.calls[0][1]).toMatchObject(ART);
+    expect(state.status).toBe("published");
+  });
+
+  it("article reconcile: on chain under '' + community with this submission -> published, no broadcast", async () => {
+    const { store } = art({ publish_author: "skateuser", publish_parent_author: "", publish_parent_permlink: "hive-173115" });
+    const d = deps(store, { getChainPost: vi.fn(async () => onChain({ parentAuthor: "", parentPermlink: "hive-173115" })) });
+    expect(await publishPost(POST_ID, d)).toMatchObject({ status: "published", reconciled: true });
+    expect(d.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("type/target mismatch never broadcasts: article with a saved snap parent, snap with a saved article parent", async () => {
+    const a = art({ publish_author: "skateuser", publish_parent_author: C1.parentAuthor, publish_parent_permlink: C1.parentPermlink });
+    const da = deps(a.store);
+    expect(await publishPost(POST_ID, da)).toEqual({ status: "failed", code: "destination_conflict" });
+    expect(da.broadcast).not.toHaveBeenCalled();
+    const s = makeStore({ publish_author: "skateuser", publish_parent_author: "", publish_parent_permlink: "hive-173115" });
+    const ds = deps(s.store);
+    expect(await publishPost(POST_ID, ds)).toEqual({ status: "failed", code: "destination_conflict" });
+    expect(ds.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("half-saved parent (one NULL, one set) -> legacy_target_unknown, no broadcast", async () => {
+    const { store } = art({ publish_author: "skateuser", publish_parent_author: "", publish_parent_permlink: null });
+    const d = deps(store);
+    expect(await publishPost(POST_ID, d)).toEqual({ status: "failed", code: "legacy_target_unknown" });
+    expect(d.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("legacy NULL parent still goes to mark_legacy (unchanged)", async () => {
+    const { store, state } = art({ publish_author: "skateuser" });
+    const d = deps(store);
+    expect(await publishPost(POST_ID, d)).toEqual({ status: "failed", code: "legacy_target_unknown" });
+    expect(state.legacyDetail).toBe("not on chain");
+    expect(d.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("ROLLBACK anti-mismatch: if the DB refuses the reservation (0043 UB422 for an article reserved as snap by an older API), NOTHING is broadcast", async () => {
+    const { store } = makeStore({ publication_type: "snap" });
+    store.reserve = vi.fn(async () => { throw Object.assign(new Error("destination does not fit the post type"), { status: 422, code: "invalid" }); });
+    const d = deps(store);
+    await expect(publishPost(POST_ID, d)).rejects.toThrow();
+    expect(d.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("buildComment article: cover = first photo first in image[]; same media rules (photos + video appended)", () => {
+    const video = "https://ipfs.skatehive.app/ipfs/Qm" + "a".repeat(44);
+    const c = buildComment(
+      { id: POST_ID, user_id: "u", title: "T", body: "b", context: null, publication_type: "article",
+        media: [{ type: "image", url: "https://images.hive.blog/cover.jpg" }, { type: "image", url: "https://images.hive.blog/2.jpg" }, { type: "video", url: video, poster: "https://images.hive.blog/p.jpg" }],
+        publish_author: null, publish_permlink: PERMLINK, publish_parent_author: null, publish_parent_permlink: null },
+      ART, PERMLINK, { env: {} as NodeJS.ProcessEnv }
+    );
+    expect(c.title).toBe("T");
+    expect(c.jsonMetadata.images).toEqual(["https://images.hive.blog/cover.jpg", "https://images.hive.blog/2.jpg"]);
+    expect(c.body).toContain("![](https://images.hive.blog/cover.jpg)");
+    expect(c.body).toContain(`<iframe src="${video}" `);
+    expect(() => buildComment({ id: POST_ID, user_id: "u", title: "T", body: "b", context: null, publication_type: "article", media: [], publish_author: null, publish_permlink: PERMLINK, publish_parent_author: null, publish_parent_permlink: null }, C1, PERMLINK, { env: {} as NodeJS.ProcessEnv })).toThrow();
+  });
+
+  it("type check comes BEFORE reconcile: article with a saved SNAP parent that is even 'ours' on chain -> conflict, no complete/broadcast", async () => {
+    const { store, state } = art({ publish_author: "skateuser", publish_parent_author: C1.parentAuthor, publish_parent_permlink: C1.parentPermlink });
+    const complete = vi.spyOn(store, "complete");
+    const d = deps(store, { getChainPost: vi.fn(async () => onChain()) }); // ours under the snap parent
+    expect(await publishPost(POST_ID, d)).toEqual({ status: "failed", code: "destination_conflict" });
+    expect(complete).not.toHaveBeenCalled();
+    expect(d.getChainPost).not.toHaveBeenCalled();
+    expect(d.broadcast).not.toHaveBeenCalled();
+    expect(state.status).toBe("failed");
+  });
+
+  it("snap with a saved ARTICLE parent that is 'ours' on chain -> conflict, no complete", async () => {
+    const { store } = makeStore({ publish_author: "skateuser", publish_parent_author: "", publish_parent_permlink: "hive-173115" });
+    const complete = vi.spyOn(store, "complete");
+    const d = deps(store, { getChainPost: vi.fn(async () => onChain({ parentAuthor: "", parentPermlink: "hive-173115" })) });
+    expect(await publishPost(POST_ID, d)).toEqual({ status: "failed", code: "destination_conflict" });
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it("image[0]: article cover = first photo even with a video poster; snap keeps the poster first", () => {
+    const video = { type: "video" as const, url: "https://ipfs.skatehive.app/ipfs/Qm" + "a".repeat(44), poster: "https://images.hive.blog/p.jpg" };
+    const photo = { type: "image" as const, url: "https://images.hive.blog/cover.jpg" };
+    const base = { id: POST_ID, user_id: "u", title: "T", body: "b", context: null, media: [video, photo], publish_author: null, publish_permlink: PERMLINK, publish_parent_author: null, publish_parent_permlink: null };
+    const a = buildComment({ ...base, publication_type: "article" }, ART, PERMLINK, { env: {} as NodeJS.ProcessEnv });
+    expect((a.jsonMetadata.image as string[])[0]).toBe(photo.url);
+    expect(a.jsonMetadata.thumbnail).toEqual([video.poster]);
+    const s = buildComment({ ...base, publication_type: "snap" }, C1, PERMLINK, { env: {} as NodeJS.ProcessEnv });
+    expect((s.jsonMetadata.image as string[])[0]).toBe(video.poster);
+  });
+});
+

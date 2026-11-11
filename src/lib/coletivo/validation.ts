@@ -10,7 +10,10 @@ export type MediaItem =
 
 export type ContextRef = { kind: "instalacao" | "evento"; slug: string };
 
+export type PublicationType = "snap" | "article";
+
 export type SubmissionInput = {
+  publicationType: PublicationType;
   title: string | null;
   body: string;
   media: MediaItem[];
@@ -101,11 +104,18 @@ export function parseSubmissionInput(raw: unknown): Parsed<SubmissionInput> {
   if (b.consent_publish !== true) {
     return fail("consent_required", "consent_publish must be true to publish on your behalf");
   }
+  // Explicit field, never inferred from media; missing = snap (old clients).
+  const pt = b.publication_type;
+  if (pt !== undefined && pt !== null && pt !== "snap" && pt !== "article") {
+    return fail("invalid_publication_type", "publication_type must be snap or article");
+  }
+  const publicationType: PublicationType = pt === "article" ? "article" : "snap";
   if (b.body !== undefined && b.body !== null && typeof b.body !== "string") {
     return fail("invalid_body", "body must be text");
   }
   const body = typeof b.body === "string" ? b.body.trim() : "";
-  if (body.length > LIMITS.bodyMax) return fail("invalid_body", `body must be up to ${LIMITS.bodyMax} chars`);
+  const bodyMax = publicationType === "article" ? LIMITS.articleBodyMax : LIMITS.bodyMax;
+  if (body.length > bodyMax) return fail("invalid_body", `body must be up to ${bodyMax} chars`);
   let title: string | null = null;
   if (b.title !== undefined && b.title !== null) {
     if (typeof b.title !== "string" || b.title.trim().length > LIMITS.titleMax) {
@@ -113,23 +123,31 @@ export function parseSubmissionInput(raw: unknown): Parsed<SubmissionInput> {
     }
     title = b.title.trim() || null;
   }
+  if (publicationType === "article") {
+    if (!title) return fail("title_required", `An article needs a title (1..${LIMITS.titleMax} chars)`);
+    if (!body) return fail("invalid_body", `An article needs a body (1..${LIMITS.articleBodyMax} chars)`);
+  }
   const media = parseMedia(b.media);
   if (!media.ok) return media;
   const context = parseContext(b.context);
   if (!context.ok) return context;
-  // Text OR media: a caption is optional when there is media.
+  // Snap: text OR media (a caption is optional when there is media).
   if (!body && media.value.length === 0) return fail("empty_submission", "Send text, a photo or a video");
   const kind = media.value.some((m) => m.type === "video")
     ? "video"
     : media.value.length
     ? "photo"
     : "text";
-  return { ok: true, value: { title, body, media: media.value, context: context.value, kind } };
+  return { ok: true, value: { publicationType, title, body, media: media.value, context: context.value, kind } };
 }
 
 /** Stable hash of the normalized content, to detect idempotency-key reuse. */
 export function requestHash(input: SubmissionInput): string {
-  const canonical = JSON.stringify([input.title, input.body, input.media, input.context]);
+  // Snap: exactly the pre-article canonical form, so retries of requests made
+  // before this change still match. Article: prefixed, so the same key with a
+  // different type is a conflict.
+  const base = [input.title, input.body, input.media, input.context];
+  const canonical = JSON.stringify(input.publicationType === "article" ? ["article", ...base] : base);
   return crypto.createHash("sha256").update(canonical).digest("hex");
 }
 

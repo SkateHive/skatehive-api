@@ -47,6 +47,11 @@ describe("verifyChainPost", () => {
     expect(verifyChainPost(post(SNAP, { author: "mallory" }), SNAP)).toBe("mismatch");
     expect(verifyChainPost(post(SNAP, { json_metadata: "{broken" }), SNAP)).toBe("mismatch");
   });
+  it("NEW explicit article: saved parent '' + community (empty string is not 'absent')", () => {
+    const ART = { ...SNAP, publish_parent_author: "", publish_parent_permlink: "hive-173115" };
+    expect(verifyChainPost(post(ART), ART, {} as NodeJS.ProcessEnv)).toBe("ok");
+    expect(verifyChainPost(post(ART, { parent_author: "peak.snaps", parent_permlink: "snap-container-1" }), ART, {} as NodeJS.ProcessEnv)).toBe("mismatch");
+  });
   it("legacy blog post (no saved parent) must be the community root", () => {
     expect(verifyChainPost(post(LEGACY), LEGACY, {} as NodeJS.ProcessEnv)).toBe("ok");
     expect(verifyChainPost(post(LEGACY, { parent_author: "peak.snaps", parent_permlink: "snap-container-1" }), LEGACY, {} as NodeJS.ProcessEnv)).toBe("mismatch");

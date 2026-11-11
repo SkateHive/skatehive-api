@@ -27,6 +27,19 @@ export const SNAP_CONTAINER_RE = /^snap-container-[a-z0-9-]+$/;
 export const SNAP_TAG = "snaps";
 
 export type SnapTarget = { parentAuthor: string; parentPermlink: string };
+export type PublicationType = "snap" | "article";
+
+/** Root post in the community (an article): parent author is the EMPTY STRING. */
+export function articleTarget(env: NodeJS.ProcessEnv = process.env): SnapTarget {
+  return { parentAuthor: "", parentPermlink: hiveParentTag(env) };
+}
+
+/** The only valid destination per publication type. */
+export function isValidTarget(type: PublicationType, t: SnapTarget | null | undefined, env: NodeJS.ProcessEnv = process.env): t is SnapTarget {
+  if (!t) return false;
+  if (type === "article") return t.parentAuthor === "" && t.parentPermlink === hiveParentTag(env);
+  return isValidSnapTarget(t);
+}
 
 export type PostForPublish = {
   id: string;
@@ -40,6 +53,8 @@ export type PostForPublish = {
   publish_permlink: string;
   publish_parent_author: string | null;
   publish_parent_permlink: string | null;
+  /** Immutable since creation; missing = snap. */
+  publication_type?: PublicationType;
 };
 
 export type Signer = { author: string; key: string; usingDefault: boolean };
@@ -144,10 +159,11 @@ export function buildComment(
   permlink: string,
   opts: { safeUser?: string | null; env?: NodeJS.ProcessEnv } = {}
 ): HiveComment {
-  if (!isValidSnapTarget(target)) throw new Error("invalid snap target");
+  const type: PublicationType = post.publication_type === "article" ? "article" : "snap";
+  if (!isValidTarget(type, target, opts.env)) throw new Error(`invalid ${type} target`);
   const lines: string[] = [];
-  // Snaps have no title: the original title opens the body instead.
-  if (post.title) lines.push(`**${post.title}**`);
+  // Snaps have no title: the original title opens the body. Articles carry it on chain.
+  if (type === "snap" && post.title) lines.push(`**${post.title}**`);
   if (post.body) lines.push(post.body);
   for (const m of post.media) {
     if (m.type === "image") lines.push(`![](${m.url})`);
@@ -159,13 +175,13 @@ export function buildComment(
   const metadata: Record<string, unknown> = {
     app: `${COLETIVO_APP_ID}/1.0`,
     format: "markdown",
-    tags: [community, SNAP_TAG, COLETIVO_APP_ID],
+    tags: type === "snap" ? [community, SNAP_TAG, COLETIVO_APP_ID] : [community, COLETIVO_APP_ID],
     // Web composer fields.
     images: imageUrls,
-    // Legacy field read by /videos (image[0] = thumbnail) and older clients:
-    // the poster first for video snaps, then the images.
-    image: [...posters, ...imageUrls],
-    [COLETIVO_APP_ID]: { submission_id: post.id, context: post.context },
+    // Legacy field read by /videos and feeds: image[0] is the thumbnail.
+    // Snap: a video's poster first. Article: the cover (first photo) first.
+    image: type === "article" ? [...imageUrls, ...posters] : [...posters, ...imageUrls],
+    [COLETIVO_APP_ID]: { submission_id: post.id, context: post.context, publication_type: type },
   };
   if (posters.length) metadata.thumbnail = posters;
   if (opts.safeUser) metadata.skatehive_user = opts.safeUser;
@@ -173,7 +189,7 @@ export function buildComment(
     parentAuthor: target.parentAuthor,
     parentPermlink: target.parentPermlink,
     permlink,
-    title: "",
+    title: type === "article" ? post.title || "" : "",
     body: lines.join("\n\n"),
     jsonMetadata: metadata,
   };
@@ -246,15 +262,22 @@ export async function publishPost(requestedId: string | null, deps: PublishDeps)
     return { status: "published", postId, author, permlink, reconciled };
   };
 
+  const type: PublicationType = post.publication_type === "article" ? "article" : "snap";
+  // NULL = no saved parent (legacy); "" is a real saved parent (article root).
   const saved: SnapTarget | null =
-    post.publish_parent_author || post.publish_parent_permlink
-      ? { parentAuthor: post.publish_parent_author || "", parentPermlink: post.publish_parent_permlink || "" }
+    post.publish_parent_author !== null && post.publish_parent_permlink !== null
+      ? { parentAuthor: post.publish_parent_author, parentPermlink: post.publish_parent_permlink }
       : null;
+  const halfSaved = (post.publish_parent_author === null) !== (post.publish_parent_permlink === null);
 
   // 1) Already reserved. Without a valid saved snap parent it came from the old
   //    root-post flow: hand it to a human, never broadcast, never complete.
+  if (halfSaved) return report("legacy_target_unknown", false);
+  // A saved target that does not fit the post's type is a conflict before
+  // anything else: never reconcile, complete or broadcast it.
+  if (saved && !isValidTarget(type, saved)) return report("destination_conflict", false);
   if (post.publish_author) {
-    if (!isValidSnapTarget(saved)) {
+    if (!saved) {
       const detail = await legacyDetail(deps, postId, post.publish_author, permlink);
       const r = await deps.store.markLegacy(postId, claimToken, detail);
       return r === "lost" ? { status: "busy" } : { status: "failed", code: "legacy_target_unknown" };
@@ -283,6 +306,9 @@ export async function publishPost(requestedId: string | null, deps: PublishDeps)
   let target: SnapTarget;
   if (saved) {
     target = saved;
+  } else if (type === "article") {
+    // Article: root post in the community; no container lookup.
+    target = articleTarget();
   } else {
     let container: SnapTarget;
     try {
