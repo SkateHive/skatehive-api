@@ -156,6 +156,44 @@ describe("resolveThumbnails", () => {
     const [result] = await resolveThumbnails([video()]);
 
     expect(result.thumbnailUrl).toBeNull();
-    expect(fetchSpy).toHaveBeenCalledTimes(1); // Pinata only
+    // Terminal row: Pinata was already checked before the row existed, so it
+    // is not asked again either.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("looks up every missing CID in ONE video_thumbnails query", async () => {
+    const a = "bafybeigaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const b = "bafybeigbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const { resolveThumbnails, fetchSpy, calls } = await loadResolver({
+      supabase: {
+        video_thumbnails: [
+          {
+            data: [
+              { cid: a, thumbnail_url: "https://db.example/a.jpg", status: "ready", attempts: 1, updated_at: new Date().toISOString() },
+              { cid: b, thumbnail_url: "https://db.example/b.jpg", status: "ready", attempts: 1, updated_at: new Date().toISOString() },
+            ],
+            error: null,
+          },
+        ],
+      },
+      fetchImpl: async () => { throw new Error("should not be called"); },
+    });
+
+    const result = await resolveThumbnails([
+      video({ videoUrl: `https://ipfs.skatehive.app/ipfs/${a}` }),
+      video({ videoUrl: `https://ipfs.skatehive.app/ipfs/${b}` }),
+      video({ videoUrl: `https://ipfs.skatehive.app/ipfs/${a}`, permlink: "same-cid-again" }),
+    ]);
+
+    expect(result.map((v) => v.thumbnailUrl)).toEqual([
+      "https://db.example/a.jpg",
+      "https://db.example/b.jpg",
+      "https://db.example/a.jpg",
+    ]);
+    const selects = calls.filter((c) => c.table === "video_thumbnails" && c.method === "select");
+    expect(selects).toHaveLength(1);
+    const inCall = calls.find((c) => c.table === "video_thumbnails" && c.method === "in");
+    expect(inCall?.args).toEqual(["cid", [a, b]]);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
