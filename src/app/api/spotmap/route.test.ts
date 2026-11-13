@@ -147,4 +147,50 @@ describe("GET /api/spotmap", () => {
     const res = await GET();
     expect(res.status).toBe(500);
   });
+
+  it("adds size-bounded fields and leaves the legacy ones unchanged", async () => {
+    const { GET } = await loadRoute({
+      supabase: {
+        spotmap_spots: [{
+          data: [
+            spotRow({ id: "med", thumbnail_medium: "https://ipfs.skatehive.app/ipfs/bafyMed", thumbnail_small: "https://s/med" }),
+            spotRow({ id: "small", thumbnail_override: "https://o/small.jpg", thumbnail_small: "https://s/small" }),
+            spotRow({ id: "none", thumbnail: "https://mymaps.usercontent.google.com/big.png" }),
+          ],
+          error: null,
+        }],
+      },
+    });
+    const [med, small, none] = (await (await GET()).json()).spots;
+    expect(med).toMatchObject({ thumbnail_medium: "https://ipfs.skatehive.app/ipfs/bafyMed", thumbnail_bounded: "https://ipfs.skatehive.app/ipfs/bafyMed", thumbnail_bounded_kind: "medium" });
+    expect(small).toMatchObject({ thumbnail_medium: null, thumbnail_bounded: "https://s/small", thumbnail_bounded_kind: "small", thumbnail: "https://o/small.jpg" });
+    // No bounded image: null, never the multi-MB original. Legacy fields still fall back as before.
+    expect(none).toMatchObject({ thumbnail_medium: null, thumbnail_bounded: null, thumbnail_bounded_kind: null });
+    expect(none.thumbnail).toBe("https://mymaps.usercontent.google.com/big.png");
+    expect(none.thumbnail_small).toBe("https://mymaps.usercontent.google.com/big.png");
+    expect(med).not.toHaveProperty("thumbnail_override");
+  });
+
+  it("retries without thumbnail_medium before the column exists (42703)", async () => {
+    const { GET } = await loadRoute({
+      supabase: {
+        spotmap_spots: [
+          { data: null, error: { code: "42703", message: "column spotmap_spots.thumbnail_medium does not exist" } },
+          { data: [spotRow({ thumbnail_small: "https://s/1" })], error: null },
+        ],
+      },
+    });
+    const res = await GET();
+    expect(res.status).toBe(200);
+    expect((await res.json()).spots[0]).toMatchObject({ thumbnail_medium: null, thumbnail_bounded: "https://s/1", thumbnail_bounded_kind: "small" });
+  });
+
+  it("still returns 500 for other query errors", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { GET } = await loadRoute({
+      supabase: { spotmap_spots: [{ data: null, error: { code: "57014", message: "statement timeout" } }] },
+    });
+    expect((await GET()).status).toBe(500);
+    errSpy.mockRestore();
+  });
 });

@@ -44,3 +44,6 @@ next-env.d.ts
 
 # leaderboard recompute job logs (Mac Mini)
 logs/
+
+# spotmap image mirror state (manifest, cached originals, generated SQL)
+.spotmap-mirror/
