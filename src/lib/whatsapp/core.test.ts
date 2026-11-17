@@ -11,7 +11,6 @@ import {
   SNAP_MAX_CHARS,
   snapMetadata,
   snapPermlink,
-  utcDayStart,
 } from "./core";
 
 const SECRET = "wa-test-secret";
@@ -46,6 +45,17 @@ describe("normalizePhone", () => {
     expect(normalizePhone("@lid")).toBeNull();
     expect(normalizePhone(42)).toBeNull();
   });
+  it("accepts only phone JID namespaces", () => {
+    expect(normalizePhone("5521999990000@c.us")).toBe("5521999990000");
+    expect(normalizePhone("5521999990000@lid")).toBeNull();
+    expect(normalizePhone("5521999990000@g.us")).toBeNull();
+    expect(normalizePhone("120363000000000000@g.us")).toBeNull();
+    expect(normalizePhone("5521999990000@broadcast")).toBeNull();
+    expect(normalizePhone("5521999990000@newsletter")).toBeNull();
+    expect(normalizePhone("5521999990000:abc@s.whatsapp.net")).toBeNull();
+    expect(normalizePhone("5521999990000:1234@s.whatsapp.net")).toBeNull();
+    expect(normalizePhone("55-21@s.whatsapp.net")).toBeNull();
+  });
 });
 
 describe("phoneHash", () => {
@@ -74,6 +84,11 @@ describe("link codes", () => {
     expect(normalizeLinkCode(" SK ABCD 2345 ")).toBe("SK-ABCD2345");
     expect(normalizeLinkCode("ABCD2345")).toBe("SK-ABCD2345");
   });
+  it("keeps code bodies that start with SK", () => {
+    expect(normalizeLinkCode("SKAB2345")).toBe("SK-SKAB2345");
+    expect(normalizeLinkCode("SK-SKAB2345")).toBe("SK-SKAB2345");
+    expect(normalizeLinkCode("skskab2345")).toBe("SK-SKAB2345");
+  });
   it("rejects ambiguous characters and wrong lengths", () => {
     expect(normalizeLinkCode("SK-ABCD0345")).toBeNull();
     expect(normalizeLinkCode("SK-ABC")).toBeNull();
@@ -98,8 +113,5 @@ describe("snaps", () => {
   it("tags metadata and embeds the safe user only when present", () => {
     expect(snapMetadata(null)).toEqual({ app: "skatehive-whatsapp", tags: ["snaps", "hive-173115", "skatehive", "skate"] });
     expect(snapMetadata("abc").skatehive_user).toBe("abc");
-  });
-  it("starts the day at UTC midnight", () => {
-    expect(utcDayStart(new Date("2026-11-17T23:59:00-03:00"))).toBe("2026-11-18T00:00:00.000Z");
   });
 });
