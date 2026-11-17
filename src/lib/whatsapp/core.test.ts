@@ -26,6 +26,22 @@ describe("isWhatsappBot", () => {
     const h = new Headers({ "x-skatehive-app-id": "coletivoxv", "x-skatehive-app-secret": "other" });
     expect(isWhatsappBot(h, CONFIG)).toBe(false);
   });
+  it("uses WHATSAPP_APP_SECRET_SHA256 when set, without needing USERBASE_APP_CLIENTS", () => {
+    const h = new Headers({ "x-skatehive-app-id": "whatsapp", "x-skatehive-app-secret": SECRET });
+    expect(isWhatsappBot(h, undefined, sha256Hex(SECRET))).toBe(true);
+    expect(isWhatsappBot(h, `coletivoxv:${sha256Hex("other")}`, sha256Hex(SECRET).toUpperCase())).toBe(true);
+    expect(isWhatsappBot(h, undefined, sha256Hex("not-the-secret"))).toBe(false);
+  });
+  it("never lets another app in through the dedicated hash", () => {
+    const h = new Headers({ "x-skatehive-app-id": "coletivoxv", "x-skatehive-app-secret": "other" });
+    expect(isWhatsappBot(h, CONFIG, sha256Hex(SECRET))).toBe(false);
+  });
+  it("falls back to USERBASE_APP_CLIENTS when the dedicated hash is unset or malformed", () => {
+    const h = new Headers({ "x-skatehive-app-id": "whatsapp", "x-skatehive-app-secret": SECRET });
+    expect(isWhatsappBot(h, CONFIG, undefined)).toBe(true);
+    expect(isWhatsappBot(h, CONFIG, "nothex")).toBe(true);
+    expect(isWhatsappBot(h, undefined, "nothex")).toBe(false);
+  });
   it("rejects a wrong secret and missing headers", () => {
     expect(isWhatsappBot(new Headers({ "x-skatehive-app-id": "whatsapp", "x-skatehive-app-secret": "x" }), CONFIG)).toBe(false);
     expect(isWhatsappBot(new Headers(), CONFIG)).toBe(false);

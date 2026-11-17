@@ -6,7 +6,11 @@ import { authenticateAppClient } from "@/lib/userbase/appClient";
 // model. Pure helpers here; routes do the I/O.
 //
 // Env:
-//   USERBASE_APP_CLIENTS   must include  whatsapp:<sha256 of the bot secret>
+//   WHATSAPP_APP_SECRET_SHA256  sha256 hex of the bot secret (the raw secret
+//                          lives only on the bot server). Kept apart from
+//                          USERBASE_APP_CLIENTS, which is a write-only
+//                          "sensitive" var shared with other partner apps;
+//                          a whatsapp entry there is still honoured.
 //   WHATSAPP_PHONE_PEPPER  32+ random bytes (hex). Never change after launch:
 //                          every stored link is keyed by it.
 
@@ -19,9 +23,21 @@ export const SNAP_MAX_CHARS = 1000;
 const CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
 const CODE_LEN = 8;
 
-/** Only the bot server (app id "whatsapp" + its secret) may call bot routes. */
-export function isWhatsappBot(headers: Headers, rawConfig?: string): boolean {
-  const app = authenticateAppClient(headers, rawConfig);
+const HASH_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * Only the bot server (app id "whatsapp" + its secret) may call bot routes.
+ * The bot's hash comes from WHATSAPP_APP_SECRET_SHA256 when set, otherwise
+ * from a whatsapp entry in USERBASE_APP_CLIENTS. Other apps never pass.
+ */
+export function isWhatsappBot(
+  headers: Headers,
+  rawConfig: string | undefined = process.env.USERBASE_APP_CLIENTS,
+  ownHash: string | undefined = process.env.WHATSAPP_APP_SECRET_SHA256
+): boolean {
+  const hash = (ownHash || "").trim().toLowerCase();
+  const config = HASH_RE.test(hash) ? `${WHATSAPP_APP_ID}:${hash}` : rawConfig;
+  const app = authenticateAppClient(headers, config);
   return app.kind === "app" && app.appId === WHATSAPP_APP_ID;
 }
 
