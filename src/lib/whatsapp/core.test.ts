@@ -131,3 +131,42 @@ describe("snaps", () => {
     expect(snapMetadata("abc").skatehive_user).toBe("abc");
   });
 });
+
+import { buildSnapBody, cleanSnapMedia, sniffImage, SNAP_MEDIA_MAX } from "./core";
+
+const CID = "bafybeihqaxgvyrjxchbtqr3lfeellrjlavvibermbcs5wulqodhvxf2kde";
+const IPFS = `https://ipfs.skatehive.app/ipfs/${CID}`;
+
+describe("cleanSnapMedia", () => {
+  it("accepts our gateway only", () => {
+    expect(cleanSnapMedia(undefined)).toEqual([]);
+    expect(cleanSnapMedia([{ type: "image", url: IPFS }, { type: "video", url: ` ${IPFS} ` }])).toEqual([
+      { type: "image", url: IPFS },
+      { type: "video", url: IPFS },
+    ]);
+    expect(cleanSnapMedia([{ type: "image", url: `https://evil.example/ipfs/${CID}` }])).toBeNull();
+    expect(cleanSnapMedia([{ type: "image", url: `${IPFS}"><script>` }])).toBeNull();
+    expect(cleanSnapMedia([{ type: "audio", url: IPFS }])).toBeNull();
+    expect(cleanSnapMedia("x")).toBeNull();
+    expect(cleanSnapMedia(Array(SNAP_MEDIA_MAX + 1).fill({ type: "image", url: IPFS }))).toBeNull();
+  });
+});
+
+describe("buildSnapBody", () => {
+  it("writes the same markup as the mobile app", () => {
+    expect(buildSnapBody("kickflip", [{ type: "image", url: IPFS }])).toBe(`kickflip\n\n![image](${IPFS})`);
+    expect(buildSnapBody("", [{ type: "video", url: IPFS }])).toBe(
+      `<iframe src="${IPFS}" width="100%" height="400" frameborder="0" allowfullscreen title="Video"></iframe>`
+    );
+    expect(buildSnapBody("só texto", [])).toBe("só texto");
+  });
+});
+
+describe("sniffImage", () => {
+  it("reads the type from the bytes", () => {
+    expect(sniffImage(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))?.mime).toBe("image/jpeg");
+    expect(sniffImage(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))?.ext).toBe("png");
+    expect(sniffImage(new TextEncoder().encode("RIFF1234WEBPVP8 "))?.ext).toBe("webp");
+    expect(sniffImage(new TextEncoder().encode("<html>"))).toBeNull();
+  });
+});

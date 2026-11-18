@@ -100,15 +100,61 @@ export function cleanSnapBody(raw: unknown): string | null {
   return s.length > SNAP_MAX_CHARS ? null : s;
 }
 
+// ---- Media (photos/videos sent on WhatsApp) -------------------------------
+// The bot uploads first (photos through POST .../whatsapp/media, videos to the
+// transcoder) and passes the resulting gateway URLs here. Only our own IPFS
+// gateway is accepted, so a snap can never embed an arbitrary URL.
+export const SNAP_MEDIA_MAX = 4;
+export const MEDIA_IMAGE_MAX_BYTES = 4 * 1024 * 1024; // under Vercel's 4.5 MB body cap
+const IPFS_MEDIA_RE = /^https:\/\/ipfs\.skatehive\.app\/ipfs\/[A-Za-z0-9]{40,100}$/;
+
+export type SnapMedia = { type: "image" | "video"; url: string };
+
+/** Validated media list ([] when absent). null when anything is malformed. */
+export function cleanSnapMedia(raw: unknown): SnapMedia[] | null {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw) || raw.length > SNAP_MEDIA_MAX) return null;
+  const out: SnapMedia[] = [];
+  for (const item of raw) {
+    const type = item?.type;
+    const url = typeof item?.url === "string" ? item.url.trim() : "";
+    if ((type !== "image" && type !== "video") || !IPFS_MEDIA_RE.test(url)) return null;
+    out.push({ type, url });
+  }
+  return out;
+}
+
+/** Text plus the same media markup the mobile app writes (markdown image / video iframe). */
+export function buildSnapBody(text: string, media: SnapMedia[]): string {
+  const markup = media.map((m) =>
+    m.type === "image"
+      ? `![image](${m.url})`
+      : `<iframe src="${m.url}" width="100%" height="400" frameborder="0" allowfullscreen title="Video"></iframe>`
+  );
+  return [text, ...markup].filter(Boolean).join("\n\n");
+}
+
+/** Image type from the file's first bytes (never trust the declared name/type). */
+export function sniffImage(bytes: Uint8Array): { ext: string; mime: string } | null {
+  const b = bytes;
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { ext: "jpg", mime: "image/jpeg" };
+  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return { ext: "png", mime: "image/png" };
+  if (b.length >= 12 && String.fromCharCode(...b.slice(0, 4)) === "RIFF" && String.fromCharCode(...b.slice(8, 12)) === "WEBP")
+    return { ext: "webp", mime: "image/webp" };
+  if (b.length >= 6 && String.fromCharCode(...b.slice(0, 4)) === "GIF8") return { ext: "gif", mime: "image/gif" };
+  return null;
+}
+
 export function snapPermlink(now = Date.now()): string {
   return `wa-${now.toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
 }
 
-export function snapMetadata(safeUser: string | null): Record<string, unknown> {
+export function snapMetadata(safeUser: string | null, images: string[] = []): Record<string, unknown> {
   const meta: Record<string, unknown> = {
     app: "skatehive-whatsapp",
     tags: ["snaps", "hive-173115", "skatehive", "skate"],
   };
+  if (images.length > 0) meta.image = images;
   if (safeUser) meta.skatehive_user = safeUser;
   return meta;
 }
