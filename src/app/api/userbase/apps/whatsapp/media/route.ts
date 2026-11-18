@@ -8,6 +8,16 @@ export const runtime = "nodejs";
 const PINATA_URL = "https://api.pinata.cloud/pinning/pinFileToIPFS";
 const GATEWAY = "https://ipfs.skatehive.app/ipfs/";
 
+// Production has the key/secret pair (like lib/video-thumbnails.ts); a JWT
+// wins when set.
+function pinataHeaders(): Record<string, string> | null {
+  const jwt = process.env.PINATA_JWT;
+  if (jwt) return { Authorization: `Bearer ${jwt}` };
+  const key = process.env.PINATA_API_KEY;
+  const secret = process.env.PINATA_SECRET_API_KEY;
+  return key && secret ? { pinata_api_key: key, pinata_secret_api_key: secret } : null;
+}
+
 // Bot only. multipart/form-data { sender, file }: a photo someone sent the bot
 // while making a snap. Only linked numbers may upload (same as posting), the
 // type is read from the bytes, and the file is pinned to our IPFS. Returns the
@@ -17,8 +27,8 @@ const GATEWAY = "https://ipfs.skatehive.app/ipfs/";
 export async function POST(req: NextRequest) {
   if (!isWhatsappBot(req.headers)) return fail(401, "unauthorized");
   if (!supabaseAdmin) return fail(503, "unavailable");
-  const jwt = process.env.PINATA_JWT;
-  if (!jwt) return fail(503, "unavailable");
+  const pinataAuth = pinataHeaders();
+  if (!pinataAuth) return fail(503, "unavailable");
 
   const form = await req.formData().catch(() => null);
   if (!form) return fail(422, "invalid_form");
@@ -49,7 +59,7 @@ export async function POST(req: NextRequest) {
   );
   upload.append("pinataOptions", JSON.stringify({ cidVersion: 1 }));
   try {
-    const res = await fetch(PINATA_URL, { method: "POST", headers: { Authorization: `Bearer ${jwt}` }, body: upload });
+    const res = await fetch(PINATA_URL, { method: "POST", headers: pinataAuth, body: upload });
     if (!res.ok) {
       console.error("[whatsapp/media] pinata", res.status, (await res.text()).slice(0, 200));
       return fail(502, "upload_failed");
