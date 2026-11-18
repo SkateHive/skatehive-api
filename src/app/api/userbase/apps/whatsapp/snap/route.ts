@@ -3,13 +3,15 @@ import { supabaseAdmin } from "@/app/utils/supabase/supabaseClient";
 import { broadcastComment, recordSoftPost, resolveSigner } from "@/lib/userbase/posting";
 import { getSafeUserIdentifier } from "@/lib/userbase/safeUser";
 import { getChainPost, permalinkUrl, resolveSnapContainer } from "@/lib/coletivo/service";
-import { cleanSnapBody, SNAPS_PER_DAY, snapMetadata, snapPermlink } from "@/lib/whatsapp/core";
+import { buildSnapBody, cleanSnapBody, cleanSnapMedia, SNAPS_PER_DAY, snapMetadata, snapPermlink } from "@/lib/whatsapp/core";
 import { runSnapFlow, type ReserveResult } from "@/lib/whatsapp/snapFlow";
 import { botCall, fail, linkedUserId } from "@/lib/whatsapp/routeKit";
 
 export const runtime = "nodejs";
 
-// Bot only. Body: { sender, body }. Publishes a text snap as the user linked to
+// Bot only. Body: { sender, body, media? }. media: up to 4 { type, url } on our
+// IPFS gateway (see cleanSnapMedia); text may be empty when there is media.
+// Publishes a snap as the user linked to
 // the sender's number: their own key, or the shared account with soft-post
 // attribution. The bot must have shown a preview and got the person's "sim".
 // The daily cap is an atomic DB reservation taken BEFORE the broadcast
@@ -17,8 +19,13 @@ export const runtime = "nodejs";
 export async function POST(req: NextRequest) {
   const call = await botCall(req, "snap", 3, 60_000);
   if (!call.ok) return call.res;
-  const text = cleanSnapBody(call.body?.body);
-  if (!text) return fail(422, "invalid_body");
+  const media = cleanSnapMedia(call.body?.media);
+  if (!media) return fail(422, "invalid_media");
+  const rawText = typeof call.body?.body === "string" ? call.body.body : "";
+  const caption = rawText.trim() ? cleanSnapBody(rawText) : "";
+  if (caption === null) return fail(422, "invalid_body");
+  if (!caption && media.length === 0) return fail(422, "invalid_body");
+  const text = buildSnapBody(caption, media);
 
   let userId: string | null;
   try {
@@ -41,7 +48,7 @@ export async function POST(req: NextRequest) {
   const uid = userId;
   const permlink = snapPermlink();
   const safe = getSafeUserIdentifier(uid);
-  const metadata = snapMetadata(safe);
+  const metadata = snapMetadata(safe, media.filter((m) => m.type === "image").map((m) => m.url));
   const db = supabaseAdmin!;
 
   const result = await runSnapFlow({

@@ -20,7 +20,12 @@ export async function botCall(req: Request, bucket: string, limit = 30, windowMs
   if (!isWhatsappBot(req.headers)) return { ok: false, res: fail(401, "unauthorized") };
   if (!supabaseAdmin) return { ok: false, res: fail(503, "unavailable") };
   const body = await req.json().catch(() => null);
-  const digits = normalizePhone(body?.sender);
+  return botGate(body, body?.sender, bucket, limit, windowMs);
+}
+
+/** Same gate for a multipart call: the caller already checked the app and parsed the form. */
+export function botGate(body: any, sender: unknown, bucket: string, limit: number, windowMs: number): BotCall {
+  const digits = normalizePhone(sender);
   if (!digits) return { ok: false, res: fail(422, "invalid_sender") };
   let hash: string;
   try {
