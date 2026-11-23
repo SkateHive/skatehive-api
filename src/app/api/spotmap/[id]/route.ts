@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/app/utils/supabase/supabaseClient";
+import { boundedImageFields } from "@/lib/spotmap-medium";
 
 // Single spot by uuid — used by the mobile detail screen (fetchSpotById).
 // The skatehive3.0 web app never shipped this route, so detail-by-id used to
@@ -46,7 +47,9 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json(
-    { success: true, spot: data },
+    // Raw row (select *, legacy fields untouched) plus the size-bounded
+    // fields. select * works before and after the medium migration.
+    { success: true, spot: { ...data, ...boundedImageFields(data) } },
     {
       headers: {
         "Cache-Control":
