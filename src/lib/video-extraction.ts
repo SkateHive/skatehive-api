@@ -55,6 +55,24 @@ function applyVideoRedirects(url: string): string {
 }
 
 /**
+ * Markdown images may carry a title: ![alt](https://x/y.gif "a title"), or an
+ * angle-bracketed URL: ![alt](<https://x/y.gif>). Keep only the URL itself, so
+ * the title text never ends up in thumbnailUrl (it did: the client got
+ * 'https://images.hive.blog/....gif "skatehive gif 1791837540634"').
+ */
+export function cleanMarkdownImageUrl(raw: string | undefined): string | null {
+  if (!raw) return null;
+  let url = raw.trim();
+  if (url.startsWith('<')) {
+    const end = url.indexOf('>');
+    url = end > 0 ? url.slice(1, end) : url.slice(1);
+  } else {
+    url = url.split(/\s+/)[0];
+  }
+  return url || null;
+}
+
+/**
  * Server-side port of extractMediaFromBody from the mobile app (apps/mobileapp/lib/utils.ts).
  * Extracts video and image URLs from a Hive post body.
  */
@@ -66,7 +84,7 @@ function extractMediaFromBody(body: string): ExtractedMedia[] {
   const imageMatches = body.match(/!\[.*?\]\((.*?)\)/g);
   if (imageMatches) {
     imageMatches.forEach(match => {
-      const url = match.match(/\((.*?)\)/)?.[1];
+      const url = cleanMarkdownImageUrl(match.match(/\((.*?)\)/)?.[1]);
       if (url && !processedUrls.has(url)) {
         media.push({ type: 'image', url });
         processedUrls.add(url);
